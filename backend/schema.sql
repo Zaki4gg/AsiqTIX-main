@@ -50,3 +50,15 @@ create table if not exists users (
 
 alter table events
   add column if not exists promoter_wallet text;
+
+
+-- tambah jenis 'withdraw' ke constraint kind
+ALTER TABLE public.transactions
+  DROP CONSTRAINT transactions_kind_check;
+
+ALTER TABLE public.transactions
+  ADD CONSTRAINT transactions_kind_check
+  CHECK (kind = ANY (ARRAY['topup','purchase','refund','withdraw']));
+
+ALTER TABLE public.transactions
+  ADD COLUMN tx_hash text;

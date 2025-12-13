@@ -1,10 +1,16 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ethers } from 'ethers'
+import { useMetamask } from '@/composables/useMetamask'
 import SideNavSB from '@/components/SideNavSB.vue'
+import { ASIQTIX_TICKETS_ABI } from '@/abi/asiqtixTicketsSimpleV3'
 
 const route = useRoute()
 const r = useRouter()
+const { connect, ensureChain } = useMetamask()
+const TICKETS_CONTRACT = import.meta.env.VITE_TICKETS_CONTRACT || ''
+
 
 const sidebarOpen = ref(false)
 const toggleSidebar = () => (sidebarOpen.value = !sidebarOpen.value)
@@ -35,10 +41,75 @@ const errorMsg = ref('')
 const buying = ref(false)
 const buyMsg = ref('')
 
+const role = ref('customer')
+
+const isAdmin = computed(() => role.value === 'admin')
+const isPromoter = computed(() => role.value === 'promoter')
+
+// ===================== 
+// Withdrawal logic for promoter/admin 
+// =====================
+
+// alamat wallet yang sedang login (dari localStorage)
+const walletAddress = computed(() => (wallet() || '').toLowerCase())
+
+// cek apakah wallet ini adalah promotor event ini (berdasarkan kolom promoter_wallet di DB)
+const isEventPromoter = computed(() => {
+  if (!ev.value) return false
+  const promoterWallet = (ev.value.promoter_wallet || '').toLowerCase()
+  return promoterWallet && walletAddress.value && promoterWallet === walletAddress.value
+})
+
+// saldo promotor dari smart contract (dalam wei)
+const promoterBalanceWei = ref(0n)
+
+const promoterBalanceEth = computed(() => {
+  try {
+    return ethers.formatEther(promoterBalanceWei.value || 0n)
+  } catch {
+    return '0.0'
+  }
+})
+
+const hasPromoterBalance = computed(() => promoterBalanceWei.value > 0n)
+
+const withdrawing = ref(false)
+const withdrawMsg = ref('')
+const withdrawTxHash = ref('')
+
+// event dianggap "selesai" kalau waktu event (date_iso) <= sekarang
+const isEventFinished = computed(() => {
+  if (!ev.value?.date_iso) return false
+  const dt = new Date(ev.value.date_iso)
+  if (Number.isNaN(dt.getTime())) return false
+  return dt.getTime() <= Date.now()
+})
+
+// siapa saja yang boleh melihat tools promotor di UI
+const canSeePromoterTools = computed(() => isAdmin.value || isEventPromoter.value)
+
+// boleh tekan tombol withdraw kalau:
+// - dia promotor / admin, event sudah selesai, ada saldo di kontrak
+const canWithdrawPromoter = computed(() =>
+  canSeePromoterTools.value && isEventFinished.value && hasPromoterBalance.value
+)
+
 async function buyTicket() {
   if (!ev.value) return
+
   if (!wallet()) {
     buyMsg.value = 'Wallet belum terhubung.'
+    return
+  }
+
+  if (!TICKETS_CONTRACT) {
+    buyMsg.value = 'Alamat kontrak VITE_TICKETS_CONTRACT belum di-set.'
+    return
+  }
+
+  const chainEventId = Number(ev.value.chain_event_id || 0)
+  if (!chainEventId) {
+    buyMsg.value = 'Event ini belum di-link ke kontrak (chain_event_id kosong).'
     return
   }
 
@@ -46,24 +117,305 @@ async function buyTicket() {
     buying.value = true
     buyMsg.value = ''
 
-    // panggil backend /purchase
+    await ensureChain('amoy')
+    const provider = new ethers.BrowserProvider(window.ethereum)
+    const signer = await provider.getSigner()
+
+    const contract = new ethers.Contract(TICKETS_CONTRACT, ASIQTIX_TICKETS_ABI, signer)
+
+    // TODO kalau mau: ambil quantity dari input
+    const quantity = 1n
+
+    // 1) Ambil data event on-chain, termasuk priceWei
+    const onchain = await contract.events(chainEventId)
+    const unitPriceWei = onchain.priceWei
+    if (unitPriceWei <= 0n) throw new Error('Harga tiket on-chain tidak valid')
+    if (!onchain.active) throw new Error('Event ini tidak aktif lagi')
+
+    const totalPriceWei = unitPriceWei * quantity
+
+    console.log('[DEBUG BUY] chainEventId', chainEventId)
+    console.log('[DEBUG BUY] on-chain event:', {
+      promoter: onchain.promoter,
+      priceWei: onchain.priceWei.toString(),
+      maxSupply: onchain.maxSupply.toString(),
+      sold: onchain.sold.toString(),
+      active: onchain.active
+    })
+    console.log('[DEBUG BUY] quantity', quantity.toString())
+    console.log('[DEBUG BUY] totalPriceWei (value yg dikirim)', totalPriceWei.toString())
+
+    // 2) Panggil buyTicket di kontrak
+    const tx = await contract.buyTicket(chainEventId, quantity, {
+      value: totalPriceWei
+    })
+    const receipt = await tx.wait()
+    if (!receipt.status) throw new Error('Transaksi di blockchain gagal')
+
+    // 3) Catat transaksi off-chain di backend
     await api('/purchase', {
       method: 'POST',
       body: JSON.stringify({
-        amount: Number(ev.value.price_pol || 0),
-        ref_id: ev.value.id, // simpan id event sebagai referensi
-        description: `Purchase ticket for ${ev.value.title || 'event'}`
+        amount: Number(ev.value.price_idr || 0) || 0,   // simpan harga IDR untuk halaman history
+        ref_id: ev.value.id,
+        description: 'On-chain purchase', 
+        tx_hash: tx.hash
       })
     })
 
-    buyMsg.value = 'Tiket berhasil dibeli! Lihat di halaman History/Profile.'
+    ev.value.sold_tickets = Number(ev.value.sold_tickets ?? 0) + Number(quantity)
+    buyMsg.value = 'Tiket berhasil dibeli! NFT tiket tersimpan di wallet kamu.'
   } catch (e) {
-    buyMsg.value = `Gagal membeli tiket: ${e?.message || e}`
+    console.error('[BUY ERROR RAW]', e)
+
+    const rpcErr = e?.info?.error || e?.error || e
+    const reason =
+      e?.reason ||
+      e?.shortMessage ||
+      rpcErr?.data?.message ||
+      rpcErr?.message ||
+      e?.message ||
+      'Unknown error'
+
+    buyMsg.value = `Gagal membeli tiket: ${reason}`
+    // console.error(e)
+    // buyMsg.value = `Gagal membeli tiket: ${e?.message || e}`
   } finally {
     buying.value = false
   }
 }
 
+// =====================
+// ambil role di backend
+//======================
+
+async function loadRole () {
+  if (!wallet()) {
+    role.value = 'customer'
+    return
+  }
+  try {
+    const me = await api('/api/me')
+    role.value = me?.role || 'customer'   // 'admin' | 'promoter' | 'customer'
+  } catch {
+    role.value = 'customer'
+  }
+}
+
+// =================
+// Ambil saldo promotor dari kontrak
+// =================
+
+async function loadPromoterBalance () {
+  promoterBalanceWei.value = 0n
+  withdrawMsg.value = ''
+
+  if (!TICKETS_CONTRACT) return
+  if (!wallet()) return
+  if (!ev.value?.chain_event_id) return
+
+  try {
+    await ensureChain('amoy')  // sama seperti di buyTicket
+    const provider = new ethers.BrowserProvider(window.ethereum)
+    const signer = await provider.getSigner()
+    const contract = new ethers.Contract(TICKETS_CONTRACT, ASIQTIX_TICKETS_ABI, signer)
+
+    const chainEventId = Number(ev.value.chain_event_id || 0)
+    if (!chainEventId) return
+
+    const bal = await contract.promoterBalances(chainEventId)
+    const bi = typeof bal === 'bigint' ? bal : BigInt(bal.toString())
+    promoterBalanceWei.value = bi
+  } catch (e) {
+    console.error('[promoterBalance] gagal load', e)
+    withdrawMsg.value = 'Gagal memuat saldo promotor.'
+  }
+}
+
+//============
+// Tombol tarik dana promotor
+//============
+
+async function withdrawPromoter () {
+  withdrawMsg.value = ''
+
+  if (!canSeePromoterTools.value) {
+    withdrawMsg.value = 'Anda tidak berhak menarik dana event ini.'
+    return
+  }
+
+  if (!ev.value?.chain_event_id) {
+    withdrawMsg.value = 'Event ini belum di-link ke kontrak.'
+    return
+  }
+
+  if (!TICKETS_CONTRACT) {
+    withdrawMsg.value = 'Alamat kontrak belum dikonfigurasi.'
+    return
+  }
+
+  try {
+    withdrawing.value = true
+
+    await ensureChain('amoy')
+    const provider = new ethers.BrowserProvider(window.ethereum)
+    const signer = await provider.getSigner()
+    const contract = new ethers.Contract(TICKETS_CONTRACT, ASIQTIX_TICKETS_ABI, signer)
+
+    const chainEventId = Number(ev.value.chain_event_id || 0)
+    if (!chainEventId) {
+      withdrawMsg.value = 'Event belum punya ID on-chain.'
+      return
+    }
+
+    const amountWei = promoterBalanceWei.value || 0n
+    const amountPol = Number(ethers.formatEther(amountWei))
+
+    // 1) Cek dulu pakai staticCall: kalau bakal revert, kita dapat reason-nya
+    try {
+      await contract.withdrawPromoter.staticCall(chainEventId)
+    } catch (err) {
+      console.error('[withdrawPromoter staticCall]', err)
+
+      const rpcErr = err?.info?.error || err?.error || err
+      let reason =
+        err?.reason ||
+        err?.shortMessage ||
+        rpcErr?.data?.message ||
+        rpcErr?.message ||
+        err?.message ||
+        'Unknown error'
+
+      if (reason.includes('EVENT_NOT_FINISHED')) {
+        withdrawMsg.value =
+          'Event belum selesai di blockchain. Dana baru bisa ditarik setelah waktu event terlewati.'
+      } else if (reason.includes('NO_BALANCE')) {
+        withdrawMsg.value = 'Tidak ada saldo yang bisa ditarik untuk event ini.'
+      } else if (reason.includes('NOT_EVENT_PROMOTER')) {
+        withdrawMsg.value = 'Wallet ini bukan promotor event ini (atau Anda bukan owner kontrak).'
+      } else if (reason.includes('EVENT_NOT_FOUND')) {
+        withdrawMsg.value = 'Event dengan ID tersebut tidak ditemukan di kontrak.'
+      } else {
+        withdrawMsg.value = `Gagal menarik dana: ${reason}`
+      }
+      return // JANGAN kirim transaksi kalau staticCall gagal
+    }
+
+    // 2) Kalau lolos staticCall, baru kirim transaksi sebenarnya
+    const tx = await contract.withdrawPromoter(chainEventId)
+    const receipt = await tx.wait()
+    if (!receipt.status) throw new Error('Transaksi withdraw gagal di blockchain')
+
+    withdrawTxHash.value = tx.hash
+
+    // 3) Simpan log di backend (opsional, kalau gagal tidak mempengaruhi on-chain)
+    try {
+      await api('/withdraw-log', {
+        method: 'POST',
+        body: JSON.stringify({
+          amount: amountPol,
+          ref_id: ev.value.id,
+          description: `Withdraw hasil penjualan event ${ev.value.title || ev.value.id}`,
+          tx_hash: tx.hash
+        })
+      })
+    } catch (err) {
+      console.error('[withdraw-log] gagal simpan ke backend', err)
+    }
+
+    withdrawMsg.value = 'Penarikan dana berhasil dikirim ke wallet.'
+    await loadPromoterBalance()
+  } catch (e) {
+    console.error('[withdrawPromoter]', e)
+
+    const rpcErr = e?.info?.error || e?.error || e
+    let reason =
+      e?.reason ||
+      e?.shortMessage ||
+      rpcErr?.data?.message ||
+      rpcErr?.message ||
+      e?.message ||
+      'Unknown error'
+
+    withdrawMsg.value = `Gagal menarik dana: ${reason}`
+  } finally {
+    withdrawing.value = false
+  }
+}
+///=====================
+
+//====================
+// Withdraw Admin
+//====================
+const adminFeeBalanceWei = ref(0n)
+const adminFeeBalanceEth = computed(() => {
+  try { return ethers.formatEther(adminFeeBalanceWei.value || 0n) }
+  catch { return '0.0' }
+})
+const adminWithdrawing = ref(false)
+const adminWithdrawMsg = ref('')
+
+const hasAdminFeeBalance = computed(() => adminFeeBalanceWei.value > 0n)
+const canWithdrawAdminFee = computed(() =>
+  isAdmin.value && hasAdminFeeBalance.value
+)
+
+async function loadAdminFeeBalance () {
+  adminFeeBalanceWei.value = 0n
+  adminWithdrawMsg.value = ''
+
+  if (!TICKETS_CONTRACT) return
+  if (!wallet()) return
+  if (!ev.value?.chain_event_id) return
+
+  try {
+    await ensureChain('amoy')
+    const provider = new ethers.BrowserProvider(window.ethereum)
+    const signer = await provider.getSigner()
+    const contract = new ethers.Contract(TICKETS_CONTRACT, ASIQTIX_TICKETS_ABI, signer)
+
+    const chainEventId = Number(ev.value.chain_event_id || 0)
+    if (!chainEventId) return
+
+    const bal = await contract.feeBalances(chainEventId)
+    const bi = typeof bal === 'bigint' ? bal : BigInt(bal.toString())
+    adminFeeBalanceWei.value = bi
+  } catch (e) {
+    console.error('[adminFeeBalance] gagal load', e)
+    adminWithdrawMsg.value = 'Gagal memuat saldo admin.'
+  }
+}
+
+async function withdrawAdminFee () {
+  adminWithdrawMsg.value = ''
+  if (!canWithdrawAdminFee.value) return
+  if (!TICKETS_CONTRACT) { adminWithdrawMsg.value = 'Alamat kontrak belum dikonfigurasi.'; return }
+
+  try {
+    adminWithdrawing.value = true
+    await ensureChain('amoy')
+    const provider = new ethers.BrowserProvider(window.ethereum)
+    const signer = await provider.getSigner()
+    const contract = new ethers.Contract(TICKETS_CONTRACT, ASIQTIX_TICKETS_ABI, signer)
+
+    const chainEventId = Number(ev.value.chain_event_id || 0)
+    const tx = await contract.withdrawFees(chainEventId)
+    const receipt = await tx.wait()
+    if (!receipt.status) throw new Error('Transaksi gagal di blockchain')
+
+    adminWithdrawMsg.value = 'Fee admin berhasil ditarik ke wallet.'
+    await loadAdminFeeBalance()
+  } catch (e) {
+    console.error('[withdrawAdminFee] error', e)
+    let msg = String(e?.reason || e?.message || e || '')
+    if (msg.includes('NO_FEE')) msg = 'Tidak ada fee yang bisa ditarik.'
+    if (msg.includes('NOT_ADMIN')) msg = 'Wallet ini bukan admin/feeRecipient di kontrak.'
+    adminWithdrawMsg.value = msg
+  } finally {
+    adminWithdrawing.value = false
+  }
+}
+//====================
 
 const dateText = computed(() => {
   const d = ev.value?.date_iso ? new Date(ev.value.date_iso) : null
@@ -74,8 +426,9 @@ const dateText = computed(() => {
 })
 
 const priceText = computed(() => {
-  const n = Number(ev.value?.price_pol || 0)
-  return `${n.toLocaleString('en-US', { maximumFractionDigits: 6 })} POL`
+  const n = Number(ev.value?.price_idr || 0)
+  if (!n) return '-'
+  return `Rp ${n.toLocaleString('id-ID')}`  // return `${n.toLocaleString('en-US', { maximumFractionDigits: 6 })} POL` diganti 25-11-2025
 })
 
 const ticketsRemaining = computed(() => {
@@ -102,6 +455,13 @@ onMounted(async () => {
     loading.value = true
     const id = String(route.params.id || '')
     ev.value = await api(`/api/events/${id}`)
+
+    // setelah event ke-load, baru cek role & saldo promotor
+    await Promise.all([
+      loadRole(),
+      loadPromoterBalance(),
+      loadAdminFeeBalance()
+    ])
   } catch (e) {
     errorMsg.value = String(e.message || e)
   } finally {
@@ -116,7 +476,7 @@ onMounted(async () => {
       <button class="back" @click="backToHome">← Back</button>
       <div class="brand"><img src="/logo_with_text.png" alt="Tickety" /></div>
       <h1 class="title">Event</h1>
-      <button class="hamburger" aria-label="Toggle menu" @click="toggleSidebar"><span/><span/><span/></button>
+      <button class="hamburger" aria-label="Toggle menu" @click="toggleSidebar"></button>
     </header>
 
     <SideNavSB v-model="sidebarOpen" extraClass="sb-topright" />
@@ -161,6 +521,63 @@ onMounted(async () => {
             </button>
 
             <p v-if="buyMsg" class="buy-msg">{{ buyMsg }}</p>
+
+             <!-- PROMOTER TOOLS -->
+            <div
+              v-if="canSeePromoterTools"
+              class="promoter-tools"
+            >
+              <h3>Promoter Tools</h3>
+              <p>Saldo dapat ditarik:</p>
+              <p class="promoter-balance">
+                <strong>{{ promoterBalanceEth }} POL</strong>
+              </p>
+
+              <p v-if="!isEventFinished" class="hint">
+                Dana baru bisa ditarik setelah waktu event terlewati.
+              </p>
+
+              <p v-if="withdrawMsg" class="buy-msg">{{ withdrawMsg }}</p>
+              <p v-if="withdrawTxHash" class="buy-msg">
+                <a
+                  :href="`https://amoy.polygonscan.com/tx/${withdrawTxHash}`"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Lihat transaksi di PolygonScan Amoy
+                </a>
+              </p>
+
+              <button
+                class="cta secondary"
+                :disabled="withdrawing || !canWithdrawPromoter"
+                @click="withdrawPromoter"
+              >
+                <span v-if="withdrawing">WITHDRAWING…</span>
+                <span v-else-if="!hasPromoterBalance">NO FUNDS</span>
+                <span v-else-if="!isEventFinished">WAIT EVENT FINISH</span>
+                <span v-else>WITHDRAW TO WALLET</span>
+              </button>
+            </div>
+
+            <!-- ADMIN TOOLS -->
+            <div v-if="isAdmin" class="promoter-tools" style="margin-top:1.5rem;">
+              <h3>Admin Fee</h3>
+              <p>Saldo fee admin yang bisa ditarik:</p>
+              <p class="promoter-balance">
+                <strong>{{ adminFeeBalanceEth }} POL</strong>
+              </p>
+              <p v-if="adminWithdrawMsg" class="buy-msg">{{ adminWithdrawMsg }}</p>
+              <button
+                class="cta secondary"
+                :disabled="adminWithdrawing || !canWithdrawAdminFee"
+                @click="withdrawAdminFee"
+              >
+                <span v-if="adminWithdrawing">WITHDRAWING…</span>
+                <span v-else-if="!hasAdminFeeBalance">NO FEE</span>
+                <span v-else>WITHDRAW ADMIN FEE</span>
+              </button>
+            </div>
           </aside>
         </div>
       </section>
@@ -253,6 +670,30 @@ onMounted(async () => {
 .buy-msg{
   margin-top:8px;
   font-size:12px;
+}
+
+.promoter-tools{
+  margin-top:16px;
+  padding-top:12px;
+  border-top:1px solid rgba(255,255,255,.1);
+  font-size:14px;
+}
+.promoter-balance{
+  font-size:16px;
+  margin:4px 0 8px;
+}
+.promoter-tools .hint{
+  font-size:12px;
+  opacity:.8;
+}
+.promoter-tools .cta.secondary{
+  margin-top:8px;
+  background:transparent;
+  border:1px solid var(--accent);
+  color:var(--accent);
+}
+.promoter-tools .cta.secondary:disabled{
+  opacity:.4;
 }
 
 .event-page :deep(.sb-backdrop){ display:none }

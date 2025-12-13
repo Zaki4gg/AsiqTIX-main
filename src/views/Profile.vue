@@ -100,13 +100,18 @@ const errOrders = ref('')
 const isoDate = (d) => {
   try { return new Date(d).toISOString().slice(0,10) } catch { return '' }
 }
+const fmtIdr = (v) => {
+  const n = Math.abs(Number(v) || 0)
+  return 'Rp '+ n.toLocaleString('id-ID')
+}
+
 function txToOrder(tx){
   return {
     id: tx.id,
     eventId: tx.ref_id || null,
     event: tx.event_title || null,
     date: isoDate(tx.created_at || Date.now()),
-    price: `${Math.abs(Number(tx.amount||0)).toFixed(0)} ${nativeSymbol.value}`,
+    price: fmtIdr(tx.amount),
     status: (tx.status || 'confirmed').replace(/^./, m => m.toUpperCase())
   }
 }
@@ -117,20 +122,21 @@ async function loadHistory(){
     loadingOrders.value = true
     const txs = await api('/transactions') // backend mengembalikan daftar transaksi wallet
     const purchases = (Array.isArray(txs) ? txs : []).filter(t => (t.kind||'').toLowerCase() === 'purchase')
-    const base = purchases.map(txToOrder)
+    let base = purchases.map(txToOrder)
+    // const base = purchases.map(txToOrder)
 
     // Lengkapi judul event via /events/:id bila perlu
     const need = [...new Set(base.filter(b => b.eventId && !b.event).map(b => b.eventId))]
     if (need.length){
-      const results = await Promise.allSettled(need.map(id => api(`/events/${id}`)))
+      const results = await Promise.allSettled(need.map(id => api(`/api/events/${id}`)))
       const map = {}
       results.forEach((r, i) => {
         if (r.status === 'fulfilled' && r.value) map[need[i]] = r.value?.title || '(Unlisted)'
       })
       base.forEach(b => { if (!b.event && b.eventId && map[b.eventId]) b.event = map[b.eventId] })
     }
-
-    orders.value = base
+    base.sort ((a,b) => new Date(b.date) - new Date(a.date))
+    orders.value = base.slice(0, 3)
   } catch (e) {
     errOrders.value = String(e?.message || e)
     orders.value = []
@@ -209,7 +215,7 @@ watch(account, async () => { await detectChain(); await refreshBalance(); await 
     <header class="header">
       <h1 class="sr-only">Profile</h1>
       <button class="hamburger" type="button" aria-label="Toggle sidebar" @click="toggleSidebar">
-        <span/><span/><span/>
+        <span></span><span></span><span></span>
       </button>
     </header>
 
@@ -261,17 +267,12 @@ watch(account, async () => { await detectChain(); await refreshBalance(); await 
                 </div>
               </div>
             </div>
+            <div class="see-all">
+              <router-link to="/history">
+                Lihat semua riwayat tiket →
+              </router-link>
+            </div>
           </div>
-        </section>
-
-        <!-- FULL-WIDTH: My Wallet -->
-        <section class="wallet-card" style="grid-column: 1 / -1;">
-          <h3>My Wallet</h3>
-          <div class="amount">{{ balanceText }}</div>
-
-          <a class="topup" :href="topUpUrl" target="_blank" rel="noopener noreferrer">
-            TOP UP
-          </a>
         </section>
       </div>
     </div>

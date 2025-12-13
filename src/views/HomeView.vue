@@ -4,6 +4,8 @@ import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import SideNavSB from '@/components/SideNavSB.vue'
 import { useMetamask } from '@/composables/useMetamask'
+import { ethers } from 'ethers'
+import { ASIQTIX_TICKETS_ABI } from '@/abi/asiqtixTicketsSimpleV3'
 
 const route = useRoute()
 const r = useRouter()
@@ -12,7 +14,8 @@ const sidebarOpen = ref(false)
 const toggleSidebar = () => (sidebarOpen.value = !sidebarOpen.value)
 watch(() => route.fullPath, () => (sidebarOpen.value = false))
 
-const { account } = useMetamask()
+const { account, connect, ensureChain } = useMetamask() // ⬅️ ambil connect & ensureChain juga
+const TICKETS_CONTRACT = import.meta.env.VITE_TICKETS_CONTRACT || ''  // ⬅️ sama kayak di EventDetailView
 const rootStyle = computed(() => ({ '--hero-img': 'url(/Background.png)' }))
 
 const RAW_BASE = (import.meta.env.VITE_API_BASE || 'http://localhost:3001').replace(/\/+$/, '')
@@ -24,6 +27,21 @@ function withWalletParam(url) {
   if (!w) return url
   return url + (url.includes('?') ? '&' : '?') + 'wallet=' + encodeURIComponent(w)
 }
+
+async function convertIdrToWei(amountIdr) {
+  const res = await api('/api/price/idr-to-wei', {
+    method: 'POST',
+    body: JSON.stringify({ amount_idr: amountIdr })
+  })
+  if (!res || !res.price_wei) throw new Error('Gagal konversi')
+  // kalau backend juga kirim idr_per_pol, boleh sekalian simpan buat tampilan:
+  if (res.idr_per_pol) {
+    polRateIdr.value = Number(res.idr_per_pol)
+  }
+  return BigInt(res.price_wei)
+}
+
+
 
 async function api(path, options = {}) {
   const full = path.startsWith('/api') ? path : `/api${path.startsWith('/') ? path : `/${path}`}`
@@ -57,9 +75,28 @@ async function uploadImageFile(file) {
   return data.url
 }
 
-const role = ref('user')
+const role = ref('customer')
 const isAdmin = computed(() => role.value === 'admin')
-const heroTitle = computed(() => (isAdmin.value ? 'CREATE A NEW EVENT' : 'UPCOMING CONCERT'))
+const isPromoter = computed(() => role.value === 'promoter')
+const heroTitle = computed(() => 
+  (isAdmin.value || isPromoter.value)
+    ? 'CREATE A NEW EVENT'
+    : 'UPCOMING CONCERT'
+) 
+// const heroTitle = computed(() => (isAdmin.value ? 'CREATE A NEW EVENT' : 'UPCOMING CONCERT'))
+
+const walletAddress = computed(() => (getWallet() || ''). toLowerCase())
+function canManageEvent (ev) {
+  // Admin boleh semua
+  if (isAdmin.value) return true
+
+  // Promoter hanya boleh event yang promoter_wallet = wallet-nya
+  if (isPromoter.value) {
+    return (ev.promoter_wallet || '').toLowerCase() === walletAddress.value
+  }
+  // Customer nggak boleh apa-apa
+  return false
+}
 
 async function hydrateAccount() {
   if (!account.value && window?.ethereum) {
@@ -72,12 +109,15 @@ async function hydrateAccount() {
 
 async function loadRole() {
   const w = getWallet()
-  if (!w) { role.value = 'user'; return }
+  if (!w) { 
+    role.value = 'customer'
+    return }
   try {
     const me = await api('/api/me')
-    role.value = me?.role === 'admin' ? 'admin' : 'user'
+    role.value = me?.role || 'customer' //backend sekarang balikin 3 level  //'admin' ? 'admin' : 'user'
+    // localStorage.setItem('user_role', role.value) //opsional : simpan biar komponen lain bisa baca cepat
   } catch {
-    role.value = 'user'
+    role.value = 'customer'
   }
 }
 
@@ -130,12 +170,61 @@ const showCreate = ref(false)
 const showEdit = ref(false)
 
 const newEvent = reactive({
-  title: '', date_iso: '', venue: '', description: '',
-  image_url: '', price_pol: 0, total_tickets: 0, listed: true
+  title: '', 
+  date_iso: '', 
+  venue: '', 
+  description: '',
+  image_url: '', 
+  price_idr: 0, 
+  total_tickets: 0, 
+  listed: true
 })
 const newImageFile = ref(null)
 const newImagePreview = ref('')
 const uploading = ref(false)
+// gambar NFT
+const newNftImageFile = ref(null)
+const newNftImagePreview = ref('')
+const newNftImageUrl = ref('')
+
+// tampilan harga rupiah (dengan titik), sedangkan newEvent.price_idr tetap number polos
+const priceIdrDisplay = ref('')
+// rate POL/IDR dari backend
+const polRateIdr = ref(null)      // 1 POL = berapa IDR
+const polRateLoading = ref(false)
+const polRateError = ref('')
+
+// --- FORMAT HARGA IDR ---
+function formatIdr(num) {
+  if (!num) return ''
+  const s = String(num)
+  return s.replace(/\B(?=(\d{3})+(?!\d))/g, '.')
+}
+
+function onPriceIdrInput(e) {
+  let raw = e.target.value || ''
+
+  // buang semua selain angka
+  raw = raw.replace(/[^\d]/g, '')
+
+  if (!raw) {
+    newEvent.price_idr = 0
+    priceIdrDisplay.value = ''
+    return
+  }
+
+  const num = Number(raw)
+  newEvent.price_idr = num
+  priceIdrDisplay.value = formatIdr(num)
+}
+
+// kalau newEvent.price_idr berubah dari kode, tampilan ikut berubah
+watch(
+  () => newEvent.price_idr,
+  (val) => {
+    priceIdrDisplay.value = val ? formatIdr(val) : ''
+  }
+)
 
 function onNewImageChange(e) {
   const f = e?.target?.files?.[0]
@@ -143,6 +232,60 @@ function onNewImageChange(e) {
   if (newImagePreview.value) URL.revokeObjectURL(newImagePreview.value)
   newImagePreview.value = f ? URL.createObjectURL(f) : ''
 }
+
+// --- HANDLE GAMBAR NFT ---
+function onNftImageChange(e) {
+  const file = e.target.files?.[0]
+  if (!file) {
+    newNftImageFile.value = null
+    if (newNftImagePreview.value) {
+      URL.revokeObjectURL(newNftImagePreview.value)
+    }
+    newNftImagePreview.value = ''
+    newNftImageUrl.value = ''
+    return
+  }
+  
+  newNftImageFile.value = file
+  if (newNftImagePreview.value) {
+    URL.revokeObjectURL(newNftImagePreview.value)
+  }
+  newNftImagePreview.value = URL.createObjectURL(file)
+}
+
+// --- RATE POL/IDR + KONVERSI IDR -> WEI ---
+async function fetchPolRate() {
+  try {
+    polRateLoading.value = true
+    polRateError.value = ''
+    const res = await api('/api/price/pol')   // backend kamu yang sekarang
+    const price = Number(res?.price_idr || 0)
+    if (!price) throw new Error('Harga tidak valid')
+    polRateIdr.value = price
+  } catch (err) {
+    console.error(err)
+    polRateError.value = 'Gagal mengambil harga POL/IDR'
+  } finally {
+    polRateLoading.value = false
+  }
+}
+
+// dipanggil otomatis saat modal Create dibuka
+watch(showCreate, (val) => {
+  if (val) {
+    fetchPolRate()
+  }
+})
+
+// konversi untuk tampilan realtime
+const priceInPol = computed(() => {
+  if (!polRateIdr.value) return null
+  const idr = Number(newEvent.price_idr || 0)
+  if (!idr) return null
+  const pol = idr / polRateIdr.value
+  if (!isFinite(pol)) return null
+  return pol
+})
 
 function toIso(dtLocal) {
   if (!dtLocal) return ''
@@ -153,34 +296,164 @@ function toIso(dtLocal) {
 
 async function createEvent() {
   try {
-    if (!newEvent.title || !newEvent.date_iso || !newEvent.venue) throw new Error('Title/Date/Venue wajib')
+    if (!newEvent.title || !newEvent.date_iso || !newEvent.venue) {
+      throw new Error('Title/Date/Venue wajib diisi')
+    }
+
+    const priceIdr = Number(newEvent.price_idr)
+    if (!priceIdr || priceIdr <= 0) {
+      throw new Error('Harga tiket (IDR) wajib > 0')
+    }
+
+    // Upload gambar event kalau ada → dipakai sekaligus sebagai metadataURI NFT
     if (newImageFile.value && !newEvent.image_url) {
       uploading.value = true
       const url = await uploadImageFile(newImageFile.value)
       newEvent.image_url = url
     }
+
+    // --- upload NFT image (kalau ada) ---
+    if (newNftImageFile.value && !newNftImageUrl.value) {
+      uploading.value = true
+      const url = await uploadImageFile(newNftImageFile.value)
+      newNftImageUrl.value = url
+    }
+    // prioritas: NFT image → kalau kosong pakai banner → kalau kosong juga, ""
+    const metadataURI = newNftImageUrl.value || newEvent.image_url || ''   // boleh kosong, nanti fallback ke defaultURI kalau kamu set
+
+    if (!TICKETS_CONTRACT) {
+      throw new Error('VITE_TICKETS_CONTRACT belum diset di .env')
+    }
+
+    await ensureChain('amoy')
+
+    const provider = new ethers.BrowserProvider(window.ethereum)
+    const signer = await provider.getSigner()
+    const contract = new ethers.Contract(TICKETS_CONTRACT, ASIQTIX_TICKETS_ABI, signer)
+
+    // 1) Konversi harga IDR → wei (POL) lewat backend
+    const priceWei = await convertIdrToWei(priceIdr)
+
+    // 2) Hitung maxSupply
+    const maxSupply = BigInt(Math.floor(Number(newEvent.total_tickets) || 0))
+    if (maxSupply <= 0n) throw new Error('Total tiket harus > 0')
+
+    // 3) Hitung eventTime (unix timestamp detik) dari tanggal yang diinput
+    const eventDate = new Date(newEvent.date_iso)
+    if (Number.isNaN(eventDate.getTime())) throw new Error('Tanggal event tidak valid')
+    const eventTime = BigInt(Math.floor(eventDate.getTime() / 1000))
+
+    // // 4) Panggil kontrak
+    // await ensureChain('amoy')
+    // const { provider } = await connect()
+    // const signer = await provider.getSigner()
+
+    // const contract = new ethers.Contract(TICKETS_CONTRACT, ASIQTIX_TICKETS_ABI, signer)
+    // const nextId = await contract.nextEventId()
+    // 2. TEST DULU PAKAI callStatic
+    try {
+      await contract.createEvent.staticCall(
+        priceWei,
+        maxSupply,
+        eventTime,
+        metadataURI
+      )
+    } catch (e) {
+      console.error('callStatic createEvent REVERT:', e)
+      console.error('reason:', e.reason)
+      console.error('raw error:', e.error ?? e.data ?? e.info)
+
+      alert(
+        e?.reason ||
+        e?.error?.message ||
+        e?.message ||
+        'Create event gagal (revert dari smart contract)'
+      )
+      // jangan lanjut kirim transaksi kalau callStatic gagal
+      return
+    }
+
+    const tx = await contract.createEvent(
+      priceWei,
+      maxSupply,
+      eventTime,
+      metadataURI
+    )
+    const receipt = await tx.wait()
+    if (!receipt.status) throw new Error('Transaksi createEvent gagal di blockchain')
+
+    // const chainEventId = Number(nextId.toString())
+    // Ambil eventId dari event EventCreated di log
+    let chainEventId = null
+    for (const log of receipt.logs) {
+      try {
+        const parsed = contract.interface.parseLog(log) // {topics: log.topics, data: log.data}
+        if (parsed?.name === 'EventCreated') {
+          chainEventId = Number(parsed.args.eventId.toString())
+          break
+        }
+      } catch {
+        // bukan log EventCreated dari kontrak ini
+      }
+    }
+    if (chainEventId == null) {
+      throw new Error('Tidak bisa menemukan eventId dari log EventCreated')
+    }
+
+    // 5) Simpan ke backend (Supabase) – chain_event_id nyambung ke eventId on-chain
     const payload = {
       title: newEvent.title,
       date_iso: toIso(newEvent.date_iso),
       venue: newEvent.venue,
       description: newEvent.description || '',
       image_url: newEvent.image_url || null,
-      price_pol: Number(newEvent.price_pol) || 0,
+      price_idr: priceIdr,
       total_tickets: Number(newEvent.total_tickets) || 0,
-      listed: !!newEvent.listed
+      listed: !!newEvent.listed,
+      chain_event_id: chainEventId
     }
-    await api('/api/events', { method: 'POST', body: JSON.stringify(payload) })
-    Object.assign(newEvent, { title: '', date_iso: '', venue: '', description: '', image_url: '', price_pol: 0, total_tickets: 0, listed: true })
+
+    await api('/api/events', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+
+    // 6) Reset form & reload list
+    Object.assign(newEvent, {
+      title: '',
+      date_iso: '',
+      venue: '',
+      description: '',
+      image_url: '',
+      price_idr: 0,
+      total_tickets: 0,
+      listed: true
+    })
+    priceIdrDisplay.value = ''
+
     newImageFile.value = null
-    if (newImagePreview.value) { URL.revokeObjectURL(newImagePreview.value); newImagePreview.value = '' }
+    if (newImagePreview.value) {
+      URL.revokeObjectURL(newImagePreview.value)
+      newImagePreview.value = ''
+    }
+
+    // reset NFT
+    newNftImageFile.value = null
+    if (newNftImagePreview.value) {
+      URL.revokeObjectURL(newNftImagePreview.value)
+    }
+    newNftImagePreview.value = ''
+    newNftImageUrl.value = ''
+
     showCreate.value = false
     await loadEvents()
-    alert('Event created.')
+    alert(`Event berhasil dibuat. ID on-chain: ${chainEventId}`)
   } catch (e) {
-    alert(`Create failed: ${e.message}`)
+    console.error(e)
+    alert(`Create event gagal: ${e?.message || e}`)
   } finally {
     uploading.value = false
-  }
+  } // diganti 26-11-2025
 }
 
 const editId = ref(null)
@@ -200,7 +473,7 @@ function startEdit(ev) {
   edit.venue = ev.venue || ''
   edit.description = ev.description || ''
   edit.image_url = ev.image_url || ''
-  edit.price_pol = Number(ev.price_pol || 0)
+  edit.price_idr = Number(ev.price_idr || 0)  // diganti 25-11-2025
   edit.total_tickets = Number(ev.total_tickets || 0)
   edit.listed = !!ev.listed
   showEdit.value = true
@@ -215,7 +488,7 @@ async function saveEdit() {
       venue: edit.venue,
       description: edit.description,
       image_url: edit.image_url || null,
-      price_pol: Number(edit.price_pol) || 0,
+      price_idr: Number(edit.price_idr) || 0, // diganti 25-11-2025
       total_tickets: Number(edit.total_tickets) || 0,
       listed: !!edit.listed
     }
@@ -271,7 +544,7 @@ function imgFor(ev) {
             <div class="img" :style="{ backgroundImage: `url(${imgFor(ev)})` }"></div>
             <div class="img-overlay"></div>
             <div class="title">{{ ev.title }}</div>
-            <div v-if="isAdmin" class="adm-tools">
+            <div v-if="canManageEvent(ev)" class="adm-tools">
               <button class="adm-btn" @click="startEdit(ev)" title="Edit">✎</button>
               <button class="adm-btn" @click="toggleList(ev)" :title="ev.listed ? 'Delist' : 'List'">
                 {{ ev.listed ? '⛔' : '✅' }}
@@ -289,7 +562,7 @@ function imgFor(ev) {
       </section>
     </main>
 
-    <button v-if="isAdmin" class="fab" title="Add event" aria-label="Create new event" @click="showCreate = true">＋<span class="sr-only">Create new event</span></button>
+    <button v-if="isAdmin || isPromoter" class="fab" title="Add event" aria-label="Create new event" @click="showCreate = true">＋<span class="sr-only">Create new event</span></button>
 
     <div v-if="showCreate" class="modal" @click.self="showCreate=false">
       <div class="modal-card">
@@ -302,7 +575,51 @@ function imgFor(ev) {
             <label>Venue <input v-model="newEvent.venue" /></label>
             <label class="file"><span>Image</span><input type="file" accept="image/*" @change="onNewImageChange" /></label>
             <div v-if="newImagePreview || newEvent.image_url" class="img-preview" :style="{ backgroundImage: `url(${newImagePreview || newEvent.image_url})` }"></div>
-            <label>Price (POL) <input type="number" min="0" step="0.0001" v-model.number="newEvent.price_pol" /></label>
+            <label class="block text-sm font-medium mb-1">NFT Image (optional)</label>
+            <input type="file" accept="image/*" @change="onNftImageChange" />
+            <p class="mt-1 text-xs text-gray-400">Jika tidak diisi, NFT akan memakai gambar banner event.</p>
+            <div v-if="newNftImagePreview" class="mt-2"><span class="text-xs text-gray-300">Preview NFT:</span><img :src="newNftImagePreview" alt="NFT preview" class="mt-1 h-24 rounded object-cover"/></div>
+            <div class="mb-4">
+              <label class="block text-sm font-medium mb-1">Price (IDR)</label>
+              <div class="relative">
+                <span
+                  class="absolute inset-y-0 left-0 flex items-center pl-3 text-sm text-gray-400"
+                >
+                  Rp
+                </span>
+                <input
+                  type="text"
+                  :value="priceIdrDisplay"
+                  @input="onPriceIdrInput"
+                  inputmode="numeric"
+                  class="w-full rounded border px-3 py-2 pl-10"
+                  placeholder="contoh: 150.000"
+                />
+              </div>
+              <div class="mt-1 text-xs text-gray-300 flex items-center gap-2">
+                <span v-if="polRateLoading">Mengambil harga POL/IDR...</span>
+                <span v-else-if="polRateError">
+                  {{ polRateError }}
+                  <button type="button" class="underline ml-1" @click="fetchPolRate">
+                    coba lagi
+                  </button>
+                </span>
+                <span v-else-if="priceInPol !== null">
+                  ≈ {{ priceInPol.toFixed(4) }} POL
+                  <span class="opacity-70 ml-1">
+                    (1 POL ≈ {{ polRateIdr?.toLocaleString('id-ID') }} IDR)
+                  </span>
+                  <button
+                    type="button"
+                    class="text-[10px] px-2 py-1 border rounded ml-2 opacity-70 hover:opacity-100"
+                    @click="fetchPolRate"
+                  >
+                    Refresh
+                  </button>
+                </span>
+              </div>
+            </div>
+            <!-- <label>Price (IDR) <input type="number" min="0" step="1" v-model.number="newEvent.price_idr" /></label> -->
             <label>Total Tickets <input type="number" min="0" step="1" v-model.number="newEvent.total_tickets" /></label>
             <label class="chk"><input type="checkbox" v-model="newEvent.listed" /> Listed</label>
             <label>Description <textarea rows="3" v-model="newEvent.description" /></label>
@@ -325,7 +642,7 @@ function imgFor(ev) {
             <label>Date (UTC) <input type="datetime-local" step="60" v-model="edit.date_iso" /></label>
             <label>Venue <input v-model="edit.venue" /></label>
             <label>Image URL <input v-model="edit.image_url" placeholder="https://..." /></label>
-            <label>Price (POL) <input type="number" min="0" step="0.0001" v-model.number="edit.price_pol" /></label>
+            <label>Price (IDR) <input type="number" min="0" step="1" v-model.number="edit.price_idr" /></label>
             <label>Total Tickets <input type="number" min="0" step="1" v-model.number="edit.total_tickets" /></label>
             <label class="chk"><input type="checkbox" v-model="edit.listed" /> Listed</label>
             <label>Description <textarea rows="3" v-model="edit.description" /></label>

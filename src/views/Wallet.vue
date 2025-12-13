@@ -4,7 +4,9 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import SideNavSB from '@/components/SideNavSB.vue'
 import { io } from 'socket.io-client'
-import { supabase } from '@/lib/supabase'
+// import { useMetamask } from '@/composables/useMetamask'
+// const { ensureChain } = useMetamask()
+// import { supabase } from '@/lib/supabase'
 
 /* ── Drawer ─────────────────────────────────────────────────────────────── */
 const route = useRoute()
@@ -33,15 +35,15 @@ function hexWeiToPol(weiHex) {
 }
 
 /* pastikan jaringan Polygon (chainId 0x89) */
-async function ensurePolygon() {
+async function ensureAmoy() {
   if (!hasMM) return false
-  if (chainId.value === '0x89') return true
+  if (chainId.value === '0x13882') return true
   try {
     await window.ethereum.request({
       method: 'wallet_switchEthereumChain',
-      params: [{ chainId: '0x89' }]
+      params: [{ chainId: '0x13882' }]
     })
-    chainId.value = '0x89'
+    chainId.value = '0x13882'
     return true
   } catch (err) {
     if (err?.code === 4902) {
@@ -49,14 +51,14 @@ async function ensurePolygon() {
         await window.ethereum.request({
           method: 'wallet_addEthereumChain',
           params: [{
-            chainId: '0x89',
-            chainName: 'Polygon PoS',
-            rpcUrls: ['https://polygon-rpc.com','https://rpc.ankr.com/polygon'],
+            chainId: '0x13882',
+            chainName: 'Polygon Amoy',
+            rpcUrls: ['https://rpc-amoy.polygon.technology'],
             nativeCurrency: { name: 'POL', symbol: 'POL', decimals: 18 },
-            blockExplorerUrls: ['https://polygonscan.com']
+            blockExplorerUrls: ['https://amoy.polygonscan.com']
           }]
         })
-        chainId.value = '0x89'
+        chainId.value = '0x13882'
         return true
       } catch { /* ignore */ }
     }
@@ -69,6 +71,42 @@ const API_BASE = (import.meta.env?.VITE_API_BASE || 'http://localhost:3001').rep
 const txs = ref([])
 const txLoading = ref(false)
 const txError = ref('')
+
+const txRows = computed(() => {
+  return (txs.value || []).map((t) => {
+    const kind = (t.kind || '').toLowerCase()
+
+    let label = kind.toUpperCase()
+    if (kind === 'topup') label = 'TOP UP'
+    else if (kind === 'purchase') label = 'PURCHASE'
+    else if (kind === 'withdraw') label = 'WITHDRAW'
+    else if (kind === 'refund') label = 'REFUND'
+
+    let direction = 'OUT'
+    let amountPol = 0
+
+    if (kind === 'purchase') {
+      // jumlah POL diambil dari blockchain (field amount_pol yg kita isi di bawah)
+      const pol = typeof t.amount_pol === 'number' && !Number.isNaN(t.amount_pol)
+        ? t.amount_pol
+        : 0
+      amountPol = pol
+      direction = 'OUT'     // beli tiket = uang keluar dari wallet ke kontrak
+    } else {
+      // topup / withdraw / refund: amount di DB sudah dalam POL
+      const basePol = Math.abs(Number(t.amount) || 0)
+      amountPol = basePol
+      direction = 'IN'      // uang masuk ke wallet dari luar / kontrak
+    }
+
+    return {
+      ...t,
+      label,
+      direction,
+      amountPol
+    }
+  })
+})
 
 async function api(path, init){
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`
@@ -87,11 +125,47 @@ async function loadTransactions(){
   try {
     txLoading.value = true
     const data = await api('/transactions')
-    txs.value = Array.isArray(data) ? data : []
+    const list = Array.isArray(data) ? data : []
+    txs.value = list
+
+    await hydratePurchasePolFromChain(list)
   } catch (e) {
     txError.value = String(e?.message || e)
   } finally {
     txLoading.value = false
+  }
+}
+
+async function hydratePurchasePolFromChain(list) {
+  if (!hasMM || !account.value) return
+
+  // kumpulkan hash utk transaksi purchase yang punya tx_hash
+  const hashes = [...new Set(
+    (list || [])
+      .filter(t => (t.kind || '').toLowerCase() === 'purchase' && t.tx_hash)
+      .map(t => t.tx_hash)
+  )]
+
+  for (const hash of hashes) {
+    try {
+      const tx = await window.ethereum.request({
+        method: 'eth_getTransactionByHash',
+        params: [hash]
+      })
+      const weiHex = tx?.value
+      if (!weiHex) continue
+
+      const pol = hexWeiToPol(weiHex)   // helper yg sudah ada di file ini
+
+      // simpan ke semua row yang punya hash ini
+      list.forEach(row => {
+        if (row.tx_hash === hash) {
+          row.amount_pol = pol
+        }
+      })
+    } catch (e) {
+      console.warn('[wallet] gagal ambil tx dari chain', hash, e)
+    }
   }
 }
 
@@ -103,12 +177,19 @@ function startSocket(){
     transports: ['websocket'],
     auth: { address: walletAddress.value.toLowerCase() }
   })
-  socket.on('tx:new', (tx) => {
+  socket.on('tx:new', async (tx) => {
     if (!tx || !tx.id) return
     if ((tx.wallet || '').toLowerCase() !== walletAddress.value.toLowerCase()) return
-    if (txs.value.findIndex(t => t.id === tx.id) === -1) txs.value.unshift(tx)
+    if (txs.value.findIndex(t => t.id === tx.id) === -1) {
+      txs.value.unshift(tx)
+      // kalau transaksi baru ini adalah PURCHASE, ambil jumlah POL dari chain
+      if ((tx.kind || '').toLowerCase() === 'purchase') {
+        await hydratePurchasePolFromChain([tx])
+      }
+    }
   })
 }
+
 function stopSocket(){
   socket?.disconnect?.()
   socket = null
@@ -166,7 +247,7 @@ async function hydrate() {
     const [acc] = await window.ethereum.request({ method: 'eth_accounts' })
     account.value = acc || ''
     chainId.value = await window.ethereum.request({ method: 'eth_chainId' }).catch(() => '')
-    if (account.value) await ensurePolygon()
+    if (account.value) await ensureAmoy()
     await refreshBalance()
     if (account.value) {
       await loadTransactions()
@@ -277,21 +358,43 @@ onUnmounted(() => {
           <div v-if="txError" class="alert error">{{ txError }}</div>
           <div v-else-if="txLoading" class="alert">Loading…</div>
 
-          <ul v-else class="tx-list" role="list">
-            <li v-for="t in txs" :key="t.id" class="tx-item">
-              <span class="tx-amount">
-                {{ Number(t.amount) < 0 ? '-' : '+' }}
-                {{ Math.abs(Number(t.amount)).toFixed(0) }}
-              </span>
-              <span class="tx-date">{{ new Date(t.created_at).toLocaleDateString('id-ID') }}</span>
-            </li>
+            <ul v-else class="tx-list" role="list">
+              <li v-for="t in txRows" :key="t.id" class="tx-item">
+                <div class="tx-main">
+                  <!-- TOP UP / PURCHASE / WITHDRAW / REFUND -->
+                  <span class="tx-kind">{{ t.label }}</span>
 
-            <!-- kosong: sisakan strip saja -->
-            <li v-if="!txs.length" class="tx-item">
-              <span class="tx-amount">–</span>
-              <span class="tx-date"></span>
-            </li>
-          </ul>
+                  <!-- jumlah dalam POL: OUT = -, IN = + -->
+                  <span class="tx-amount">
+                    {{ t.direction === 'OUT' ? '-' : '+' }}
+                    {{ t.amountPol.toFixed(6) }} POL
+                  </span>
+                </div>
+
+                <div class="tx-meta">
+                  <span class="tx-date">
+                    {{ new Date(t.created_at).toLocaleString('id-ID') }}
+                  </span>
+
+                  <!-- link ke PolygonScan Amoy kalau ada tx_hash -->
+                  <a
+                    v-if="t.tx_hash"
+                    :href="`https://amoy.polygonscan.com/tx/${t.tx_hash}`"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="tx-link"
+                  >
+                    Lihat di PolygonScan
+                  </a>
+                </div>
+              </li>
+
+              <!-- kalau belum ada transaksi sama sekali -->
+              <li v-if="!txRows.length" class="tx-item">
+                <span class="tx-amount">–</span>
+                <span class="tx-date"></span>
+              </li>
+            </ul>
         </section>
       </section>
     </div>

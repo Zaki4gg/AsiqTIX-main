@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, watch, ref } from 'vue'
 import { useRoute, RouterLink } from 'vue-router'
 
 const props = defineProps({
@@ -8,6 +8,36 @@ const props = defineProps({
   extraClass: { type: String, default: '' }
 })
 const emit = defineEmits(['update:modelValue'])
+
+const role = ref('customer')
+const isAdmin = computed(() => role.value === 'admin')
+const isPromoter = computed(() => 
+  role.value === 'promoter' || role.value === 'promotor'
+) //toleransi typo lama)
+
+const API_HOST = import.meta.env.VITE_API_BASE || ''
+
+function getWallet () {
+  return localStorage.getItem('walletAddress') || ''
+}
+
+async function loadRole () {
+  const w = getWallet()
+  if (!w) return
+  try {
+    const res = await fetch(`${API_HOST}/api/me`, {
+      headers: { 'x-wallet-address': w }
+    })
+    const data = await res.json().catch(() => ({}))
+    if (res.ok && data.role) {
+      role.value = data.role
+    }
+  } catch {
+    role.value = 'customer'
+  }
+}
+
+onMounted(loadRole)
 
 const route = useRoute()
 const isOpen = computed({
@@ -33,7 +63,12 @@ watch(() => route.fullPath, close)
       @click.stop
     >
       <nav class="sb-menu" aria-label="Main">
-        <RouterLink class="sb-item" active-class="active" to="/home"    @click="close">Home</RouterLink>
+        <RouterLink class="sb-item" active-class="active" to="/home"   @click="close">
+          {{ isAdmin ? 'Admin Dashboard'
+                     : (isPromoter ? 'Promoter Dashboard' : 'Home') }}
+        </RouterLink>
+        <!-- <RouterLink v-if="isPromotor" class="sb-item" active-class="active" to="/promotor" @click="close">Promotor Dashboard</RouterLink> -->
+        <!-- <RouterLink class="sb-item" active-class="active" to="/home"    @click="close">Home</RouterLink> -->
         <RouterLink class="sb-item" active-class="active" to="/profile" @click="close">Profile</RouterLink>
         <RouterLink class="sb-item" active-class="active" to="/wallet"  @click="close">Wallet</RouterLink>
         <RouterLink class="sb-item" active-class="active" to="/history" @click="close">History</RouterLink>

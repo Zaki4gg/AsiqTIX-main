@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { ethers } from 'ethers'
 import { useMetamask } from '@/composables/useMetamask'
 import SideNavSB from '@/components/SideNavSB.vue'
+import Purchase_Success_Dialog from '@/components/Purchase_Success_Dialog.vue'
+import Purchase_Error_Dialog from '@/components/Purchase_Error_Dialog.vue'
 import { ASIQTIX_TICKETS_ABI } from '@/abi/asiqtixTicketsSimpleV3'
 
 const route = useRoute()
@@ -40,6 +42,11 @@ const loading = ref(true)
 const errorMsg = ref('')
 const buying = ref(false)
 const buyMsg = ref('')
+const showPurchaseSuccess = ref(false)
+const showPurchaseError = ref(false)
+const lastPurchase = ref(null)
+const lastPurchaseError = ref('')
+
 
 const role = ref('customer')
 
@@ -163,8 +170,24 @@ async function buyTicket() {
       })
     })
 
-    ev.value.sold_tickets = Number(ev.value.sold_tickets ?? 0) + Number(quantity)
+    ev.value.sold_tickets = 
+      Number(ev.value.sold_tickets ?? 0) + Number(quantity)
+    // hitung harga dalam POL untuk ditampilkan di struk
+    const unitPricePol = Number(ethers.formatEther(unitPriceWei))
+    const totalPol = Number(ethers.formatEther(totalPriceWei))
+
+    lastPurchase.value = {
+      eventTitle: ev.value.title,
+      venue: ev.value.venue,
+      dateText: dateText.value,
+      quantity: Number(quantity),
+      pricePerTicketPol: unitPricePol,
+      totalPol,
+      txHash: tx.hash
+    }
+
     buyMsg.value = 'Tiket berhasil dibeli! NFT tiket tersimpan di wallet kamu.'
+    showPurchaseSuccess.value = true
   } catch (e) {
     console.error('[BUY ERROR RAW]', e)
 
@@ -178,8 +201,8 @@ async function buyTicket() {
       'Unknown error'
 
     buyMsg.value = `Gagal membeli tiket: ${reason}`
-    // console.error(e)
-    // buyMsg.value = `Gagal membeli tiket: ${e?.message || e}`
+    lastPurchaseError.value = buyMsg.value
+    showPurchaseError.value = true
   } finally {
     buying.value = false
   }
@@ -399,9 +422,28 @@ async function withdrawAdminFee () {
     const contract = new ethers.Contract(TICKETS_CONTRACT, ASIQTIX_TICKETS_ABI, signer)
 
     const chainEventId = Number(ev.value.chain_event_id || 0)
+    const bal = await contract.feeBalances(chainEventId)
+    const bi = typeof bal === 'bigint' ? bal : BigInt(bal.toString())
+    const amountPol = Number(ethers.formatEther(bi || 0n))
+
     const tx = await contract.withdrawFees(chainEventId)
     const receipt = await tx.wait()
     if (!receipt.status) throw new Error('Transaksi gagal di blockchain')
+
+    try {
+      await api('/withdraw-log', {
+        method: 'POST',
+        body: JSON.stringify({
+          amount: amountPol,
+          ref_id: ev.value.id, // id event di DB
+          description: `Withdraw fee admin event ${ev.value.title || ev.value.id}`,
+          tx_hash: tx.hash
+        })
+      })
+    } catch (err) {
+      console.error('[withdraw-log admin] gagal simpan ke backend', err)
+      // tidak usah throw, yang penting penarikan on-chain sudah sukses
+    }
 
     adminWithdrawMsg.value = 'Fee admin berhasil ditarik ke wallet.'
     await loadAdminFeeBalance()
@@ -582,6 +624,28 @@ onMounted(async () => {
         </div>
       </section>
     </main>
+
+    <!-- POPUP STRUK PEMBELIAN -->
+    <Purchase_Success_Dialog
+      v-if="showPurchaseSuccess && lastPurchase"
+      :open="showPurchaseSuccess"
+      :event-title="lastPurchase.eventTitle"
+      :venue="lastPurchase.venue"
+      :date-text="lastPurchase.dateText"
+      :quantity="lastPurchase.quantity"
+      :price-per-ticket-pol="lastPurchase.pricePerTicketPol"
+      :total-pol="lastPurchase.totalPol"
+      :tx-hash="lastPurchase.txHash"
+      @close="showPurchaseSuccess = false"
+    />
+
+    <!-- POPUP ERROR PEMBELIAN -->
+    <Purchase_Error_Dialog
+      v-if="showPurchaseError"
+      :open="showPurchaseError"
+      :message="lastPurchaseError || buyMsg"
+      @close="showPurchaseError = false"
+    />
   </div>
 </template>
 

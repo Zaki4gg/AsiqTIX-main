@@ -1,38 +1,33 @@
 <script setup>
 import { onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 
-const router = useRouter()
-
-function performLogout() {
-  // bersihkan kredensial lokal
+function clearLocalAuth () {
   localStorage.removeItem('auth_token')
   localStorage.removeItem('walletAddress')
-
-  // kalau ada state mgmt lain (Pinia/Vuex), reset di sini juga.
-  // contoh:
-  // const userStore = useUserStore()
-  // userStore.$reset()
-
-  router.replace({ name: 'login' }) // atau { name: 'home' }
+  localStorage.removeItem('walletRole')
+  localStorage.removeItem('asiqtix-user')
 }
 
-function cancelLogout() {
+function doLogout () {
+  clearLocalAuth()
+  window.location.href = '/'   // langsung ke login
+}
+
+function cancelLogout () {
   // balik ke halaman sebelumnya
-  if (window.history.length > 1) router.back()
-  else router.replace({ name: 'home' })
+  if (window.history.length > 1) window.history.back()
+  else window.location.href = '/'
 }
 
-// pakai native confirm biar cepat
 onMounted(() => {
   const ok = window.confirm('Apakah Anda yakin ingin keluar?')
-  if (ok) performLogout()
+  if (ok) doLogout()
   else cancelLogout()
 })
 </script>
 
 <template>
-  <!-- fallback kalau browser memblokir window.confirm -->
+  <!-- fallback kalau browser blokir window.confirm -->
   <div class="wrap">
     <div class="card">
       <h2>Keluar dari akun?</h2>

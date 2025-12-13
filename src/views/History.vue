@@ -3,6 +3,7 @@ import '@/assets/history.css'
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import SideNavSB from '@/components/SideNavSB.vue'
+import Tiket_Download from '@/components/Tiket_Download.vue'
 
 /* ── Drawer / sidebar ─────────────────────────────────────────────────── */
 const route = useRoute()
@@ -142,19 +143,30 @@ async function api (path, init) {
 
 /* ── LOAD dari ledger backend (Supabase) ───────────────────────────────── */
 async function loadLedgerPurchases () {
-  // backend: GET /api/transactions → difilter by wallet x-wallet-address 
+  // backend: GET /api/transactions → difilter oleh wallet x-wallet-address 
   const list = await api('/api/transactions')
   const items = (Array.isArray(list) ? list : [])
     .filter(x => (x?.kind || '').toLowerCase() === 'purchase')
-    .map(x => ({
-      _sortAt: +new Date(x.created_at),
-      id: x.id,
-      title: 'Ticket purchase',
-      date: fmtDate(x.created_at),
-      booking: (x.ref_id || x.id || '').toString().slice(0, 16),
-      price: fmtIdr(x.amount),
-      status: x.status || 'Successful'
-    }))
+    .map(x => {
+      const createdIso = x.created_at
+      const ticketId = (x.ticket_id || x.ticket_no || x.ref_id || x.id || '').toString()
+
+      return {
+        _sortAt: +new Date(createdIso),
+        id: x.id,
+        title: 'Ticket purchase',
+        date: fmtDate(createdIso),
+        booking: ticketId.slice(0, 16),
+        price: fmtIdr(x.amount),
+        status: x.status || 'Successful',
+
+        // data tambahan untuk komponen tiket
+        eventId: x.ref_id || null,
+        ticketId,
+        dateIso: createdIso,
+        location: x.location || ''
+      }
+    })
   return items
 }
 
@@ -193,15 +205,21 @@ async function loadOnchainTickets () {
 
       const tokenId = hexToDec(lg.topics?.[3] || '0x0')
       const tsMs = blk?.timestamp ? Number(BigInt(blk.timestamp) * 1000n) : Date.now()
+      const ticketIdStr = String(tokenId)
 
       out.push({
         _sortAt: tsMs,
-        id: `${lg.transactionHash}-${tokenId}`,
-        title: `NFT Ticket #${tokenId}`,
+        id: `${lg.transactionHash}-${ticketIdStr}`,
+        title: `NFT Ticket #${ticketIdStr}`,
         date: fmtDate(tsMs),
         booking: (lg.transactionHash || '').slice(0, 16),
         price: '—',
-        status: 'Successful'
+        status: 'Successful',
+
+        eventId: null,
+        ticketId: ticketIdStr,
+        dateIso: new Date(tsMs).toISOString(),
+        location: ''
       })
     }
 
@@ -254,10 +272,10 @@ async function refreshHistory () {
   }
 }
 
-function downloadTicket (row) {
-  // nanti bisa diganti generate PDF / QR code
-  alert(`Downloading ticket: ${row.title} (${row.booking})`)
-}
+// function downloadTicket (row) {
+//   // nanti bisa diganti generate PDF / QR code
+//   alert(`Downloading ticket: ${row.title} (${row.booking})`)
+// }
 
 /* ── EVENT LISTENERS ───────────────────────────────────────────────────── */
 function onAccountsChanged (accs) {
@@ -314,7 +332,13 @@ onUnmounted(() => {
         <li v-for="row in histories" :key="row.id" class="item">
           <div class="header-line">
             <h3 class="event">{{ row.title }}</h3>
-            <button class="btn" @click="downloadTicket(row)">DOWNLOAD TICKET</button>
+            <Tiket_Download
+              :event-id="row.eventId"
+              :ticket-code="row.ticketId || row.booking"
+              :fallback-title="row.title"
+              :fallback-date="row.dateIso || row.date"
+              :fallback-location="row.location"
+            />
           </div>
           <div class="meta">
             <p><strong>Date:</strong> {{ row.date }}</p>

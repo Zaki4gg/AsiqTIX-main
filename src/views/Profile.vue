@@ -181,6 +181,9 @@ function copyAddr(){
 /* ---------- SVG AVATAR ---------- */
 const profileSvg = computed(() => profileSvgRaw)
 
+/* ---------- TOP UP URL ---------- */
+const topUpUrl = 'https://app.metamask.io/buy/build-quote'
+
 /* ---------- lifecycle ---------- */
 let balTimer = null
 onMounted(async () => {

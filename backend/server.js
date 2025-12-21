@@ -1,6 +1,4 @@
 // backend/server.js
-
-/* eslint-env node */
 import 'dotenv/config'
 import http from 'node:http'
 import multer from 'multer'
@@ -16,7 +14,8 @@ import { verifyMessage } from 'ethers'
 import { Server as IOServer } from 'socket.io'
 import supabase from './supabaseClient.js'
 import { JsonRpcProvider, Contract } from 'ethers'
-import process from 'process:node'
+import process from 'node:process'
+// import fetch from 'node-fetch'
 
 // ----- Harga POL/IDR helper -----
 import fetch from 'node-fetch'  // kalau belum, npm install node-fetch
@@ -316,7 +315,28 @@ const httpJSON = async (url, { timeout = 6000 } = {}) => {
     return await r.json()
   } finally { clearTimeout(t) }
 }
-
+const usdIdrCache = { v: null, ts: 0 }
+async function getUsdIdr() {
+  const now = Date.now()
+  if (usdIdrCache.v && now - usdIdrCache.ts < 10 * 60_000) return usdIdrCache.v
+  try { const j = await httpJSON('https://api.exchangerate.host/latest?base=USD&symbols=IDR'); const v = Number(j?.rates?.IDR); if (v) { usdIdrCache.v = v; usdIdrCache.ts = now; return v } } catch {}
+  try { const j = await httpJSON('https://api.frankfurter.app/latest?from=USD&to=IDR'); const v = Number(j?.rates?.IDR); if (v) { usdIdrCache.v = v; usdIdrCache.ts = now; return v } } catch {}
+  try { const j = await httpJSON('https://open.er-api.com/v6/latest/USD'); const v = Number(j?.rates?.IDR); if (v) { usdIdrCache.v = v; usdIdrCache.ts = now; return v } } catch {}
+  throw new Error('USD→IDR unavailable')
+}
+async function trySpotUSD() {
+  try { const j = await httpJSON('https://api.binance.com/api/v3/ticker/price?symbol=POLUSDT'); const p = Number(j?.price); if (p) return { p, src: 'binance:POLUSDT' } } catch {}
+  try { const j = await httpJSON('https://api.binance.com/api/v3/ticker/price?symbol=MATICUSDT'); const p = Number(j?.price); if (p) return { p, src: 'binance:MATICUSDT' } } catch {}
+  try { const j = await httpJSON('https://www.okx.com/api/v5/market/ticker?instId=POL-USDT'); const p = Number(j?.data?.[0]?.last); if (p) return { p, src: 'okx:POL-USDT' } } catch {}
+  try { const j = await httpJSON('https://www.okx.com/api/v5/market/ticker?instId=MATIC-USDT'); const p = Number(j?.data?.[0]?.last); if (p) return { p, src: 'okx:MATICUSDT' } } catch {}
+  try { const j = await httpJSON('https://api.bybit.com/v5/market/tickers?category=spot&symbol=POLUSDT'); const p = Number(j?.result?.list?.[0]?.lastPrice); if (p) return { p, src: 'bybit:POLUSDT' } } catch {}
+  try { const j = await httpJSON('https://api.bybit.com/v5/market/tickers?category=spot&symbol=MATICUSDT'); const p = Number(j?.result?.list?.[0]?.lastPrice); if (p) return { p, src: 'bybit:MATICUSDT' } } catch {}
+  try { const j = await httpJSON('https://api.mexc.com/api/v3/ticker/price?symbol=POLUSDT'); const p = Number(j?.price); if (p) return { p, src: 'mexc:POLUSDT' } } catch {}
+  try { const j = await httpJSON('https://api.mexc.com/api/v3/ticker/price?symbol=MATICUSDT'); const p = Number(j?.price); if (p) return { p, src: 'mexc:MATICUSDT' } } catch {}
+  try { const j = await httpJSON('https://api.gateio.ws/api/v4/spot/tickers?currency_pair=POL_USDT'); const p = Number(j?.[0]?.last); if (p) return { p, src: 'gate:POL_USDT' } } catch {}
+  try { const j = await httpJSON('https://api.gateio.ws/api/v4/spot/tickers?currency_pair=MATIC_USDT'); const p = Number(j?.[0]?.last); if (p) return { p, src: 'gate:MATIC_USDT' } } catch {}
+  throw new Error('All exchanges failed')
+}
 app.get('/api/price/pol', async (_req, res) => {
   try {
     const priceIdr = await fetchPolIdrRate()
@@ -836,7 +856,7 @@ app.post('/api/promoters', requireAdmin, async (req, res) => {
    FALLBACK & ERROR HANDLER
    ========================= */
 app.use((req, res) => res.status(404).json({ message: 'Not Found' }))
-
+// eslint-disable-next-line no-unused-vars
 app.use((err, _req, res, _next) => {
   console.error('[server] Unhandled error:', err && err.stack ? err.stack : err)
   res.status(err.status || 500).json({ message: err.message || 'Internal Server Error' })

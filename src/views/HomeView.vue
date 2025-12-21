@@ -14,7 +14,7 @@ const sidebarOpen = ref(false)
 const toggleSidebar = () => (sidebarOpen.value = !sidebarOpen.value)
 watch(() => route.fullPath, () => (sidebarOpen.value = false))
 
-const { account, ensureChain } = useMetamask() // ⬅️ ambil connect & ensureChain juga
+const { account, connect, ensureChain } = useMetamask() // ⬅️ ambil connect & ensureChain juga
 const TICKETS_CONTRACT = import.meta.env.VITE_TICKETS_CONTRACT || ''  // ⬅️ sama kayak di EventDetailView
 const rootStyle = computed(() => ({ '--hero-img': 'url(/Background.png)' }))
 
@@ -40,6 +40,8 @@ async function convertIdrToWei(amountIdr) {
   }
   return BigInt(res.price_wei)
 }
+
+
 
 async function api(path, options = {}) {
   const full = path.startsWith('/api') ? path : `/api${path.startsWith('/') ? path : `/${path}`}`
@@ -101,9 +103,7 @@ async function hydrateAccount() {
     try {
       const accs = await window.ethereum.request({ method: 'eth_accounts' })
       if (accs?.[0]) account.value = accs[0]
-    } catch {
-      account.value = ''
-    }
+    } catch {}
   }
 }
 
@@ -511,7 +511,10 @@ async function toggleList(ev) {
   catch (e) { alert(`List/Delist failed: ${e.message}`) }
 }
 
-
+function imgFor(ev) {
+  return ev.image_url || (ev.title?.toLowerCase().includes('feast') ? imgFeast :
+    ev.title?.toLowerCase().includes('sheila') ? imgSO7 : imgGigi)
+}
 </script>
 
 <template>

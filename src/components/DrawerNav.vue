@@ -35,7 +35,6 @@ watch(() => route.fullPath, close)
 </template>
 
 <style scoped>
-/* Kunci warna drawer agar tidak ditimpa account.css */
 .drawer{
   position:fixed; inset:0; z-index:60; pointer-events:none; opacity:0; visibility:hidden;
   transition:opacity .2s ease, visibility .2s ease;
@@ -47,11 +46,14 @@ watch(() => route.fullPath, close)
 }
 
 .drawer-panel{
-  position:absolute;
-  top: clamp(72px, 10vw, 120px);
-  right:18px; left:auto; bottom:18px;
-  width:min(86vw, 320px);
-  overflow:auto;
+  position: absolute;
+  top: calc(var(--topbar-h, 64px) + 16px);
+  right: 18px;
+  left: auto;
+
+  width: min(86vw, 320px);
+  max-height: calc(100vh - (var(--topbar-h, 64px) + 32px));
+  overflow: auto;
 
   background:#F4F1DE !important;
   color:#2b1c08 !important;
@@ -64,6 +66,7 @@ watch(() => route.fullPath, close)
   opacity:.01;
   transition: transform .22s ease, opacity .22s ease;
 }
+
 .drawer.is-open .drawer-panel{ transform:none; opacity:1; }
 
 .mini-nav{ display:grid; gap:10px; }

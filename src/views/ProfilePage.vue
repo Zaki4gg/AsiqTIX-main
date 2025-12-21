@@ -2,12 +2,12 @@
 import '@/assets/account.css'
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import DrawerNav from '@/components/DrawerNav.vue'
+import Drawer from '@/components/DrawerNav.vue'
 import { useMetamask } from '@/composables/useMetamask'
 import profileSvgRaw from '@/assets/profile.svg?raw'
 import { io } from 'socket.io-client'
 
-/* ---------- ROUTE + DRAWER ---------- */
+/* ---------- ROUTE ---------- */
 const route = useRoute()
 const router = useRouter()
 const sidebarOpen = ref(false)
@@ -203,12 +203,13 @@ watch(account, async () => { await detectChain(); await refreshBalance(); await 
   <div class="profile-page">
     <header class="header">
       <h1 class="sr-only">Profile</h1>
+
       <button class="hamburger" type="button" aria-label="Toggle sidebar" @click="toggleSidebar">
         <span></span><span></span><span></span>
       </button>
     </header>
 
-    <DrawerNav v-model="sidebarOpen" />
+    <Drawer v-model="sidebarOpen" />
 
     <div class="content">
       <div class="grid">

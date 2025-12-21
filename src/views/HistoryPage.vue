@@ -2,10 +2,10 @@
 import '@/assets/history.css'
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
-import SideNavSB from '@/components/SideNavSB.vue'
+import Drawer from '@/components/DrawerNav.vue'
 import Tiket_Download from '@/components/Tiket_Download.vue'
 
-/* ── Drawer / sidebar ─────────────────────────────────────────────────── */
+/* ── sidebar ─────────────────────────────────────────────────── */
 const route = useRoute()
 const sidebarOpen = ref(false)
 const toggleSidebar = () => (sidebarOpen.value = !sidebarOpen.value)
@@ -143,7 +143,7 @@ async function api (path, init) {
 
 /* ── LOAD dari ledger backend (Supabase) ───────────────────────────────── */
 async function loadLedgerPurchases () {
-  // backend: GET /api/transactions → difilter oleh wallet x-wallet-address 
+  // backend: GET /api/transactions → difilter oleh wallet x-wallet-address
   const list = await api('/api/transactions')
   const items = (Array.isArray(list) ? list : [])
     .filter(x => (x?.kind || '').toLowerCase() === 'purchase')
@@ -320,7 +320,7 @@ onUnmounted(() => {
     </header>
 
     <!-- posisikan sidebar di kanan atas -->
-    <SideNavSB v-model="sidebarOpen" extraClass="sb-topright" />
+    <Drawer v-model="sidebarOpen" extraClass="sb-topright" />
 
     <main class="wrap">
       <h2 class="section-title">Riwayat Tiket</h2>

@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ethers } from 'ethers'
 import { useMetamask } from '@/composables/useMetamask'
-import SideNavSB from '@/components/SideNavSB.vue'
+import Drawer from '@/components/DrawerNav.vue'
 import Purchase_Success_Dialog from '@/components/Purchase_Success_Dialog.vue'
 import Purchase_Error_Dialog from '@/components/Purchase_Error_Dialog.vue'
 import { ASIQTIX_TICKETS_ABI } from '@/abi/asiqtixTicketsSimpleV3'
@@ -52,8 +52,8 @@ const role = ref('customer')
 
 const isAdmin = computed(() => role.value === 'admin')
 
-// ===================== 
-// Withdrawal logic for promoter/admin 
+// =====================
+// Withdrawal logic for promoter/admin
 // =====================
 
 // alamat wallet yang sedang login (dari localStorage)
@@ -164,12 +164,12 @@ async function buyTicket() {
       body: JSON.stringify({
         amount: Number(ev.value.price_idr || 0) || 0,   // simpan harga IDR untuk halaman history
         ref_id: ev.value.id,
-        description: 'On-chain purchase', 
+        description: 'On-chain purchase',
         tx_hash: tx.hash
       })
     })
 
-    ev.value.sold_tickets = 
+    ev.value.sold_tickets =
       Number(ev.value.sold_tickets ?? 0) + Number(quantity)
     // hitung harga dalam POL untuk ditampilkan di struk
     const unitPricePol = Number(ethers.formatEther(unitPriceWei))
@@ -513,14 +513,24 @@ onMounted(async () => {
 
 <template>
   <div class="event-page">
-    <header class="topbar">
-      <button class="back" @click="backToHome">← Back</button>
-      <div class="brand"><img src="/logo_with_text.png" alt="Tickety" /></div>
-      <h1 class="title">Event</h1>
-      <button class="hamburger" aria-label="Toggle menu" @click="toggleSidebar"></button>
-    </header>
+  <header class="topbar">
+    <button class="back" @click="backToHome">← Back</button>
+    <div class="brand"><img src="/logo_with_text.png" alt="Tickety" /></div>
+    <h1 class="title">Event</h1>
 
-    <SideNavSB v-model="sidebarOpen" extraClass="sb-topright" />
+    <button
+      class="hamburger"
+      type="button"
+      aria-label="Toggle menu"
+      @click.stop="toggleSidebar"
+    >
+      <span></span>
+      <span></span>
+      <span></span>
+    </button>
+  </header>
+
+    <Drawer v-model="sidebarOpen" extraClass="sb-topright" />
 
     <main>
       <div v-if="errorMsg" class="alert error">{{ errorMsg }}</div>

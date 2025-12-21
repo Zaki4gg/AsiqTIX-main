@@ -1,11 +1,15 @@
 <script setup>
 import '@/assets/home.css'
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import SideNavSB from '@/components/SideNavSB.vue'
+import Drawer from '@/components/DrawerNav.vue'
 import { useMetamask } from '@/composables/useMetamask'
 import { ethers } from 'ethers'
 import { ASIQTIX_TICKETS_ABI } from '@/abi/asiqtixTicketsSimpleV3'
+
+import imgFeast from '@/assets/Feast_Foto.jpg'
+import imgSO7 from '@/assets/SO7.jpeg'
+import imgGigi from '@/assets/Band-Gigi-2018.jpg'
 
 const route = useRoute()
 const r = useRouter()
@@ -14,9 +18,21 @@ const sidebarOpen = ref(false)
 const toggleSidebar = () => (sidebarOpen.value = !sidebarOpen.value)
 watch(() => route.fullPath, () => (sidebarOpen.value = false))
 
-const { account, ensureChain } = useMetamask() // ⬅️ ambil connect & ensureChain juga
-const TICKETS_CONTRACT = import.meta.env.VITE_TICKETS_CONTRACT || ''  // ⬅️ sama kayak di EventDetailView
-const rootStyle = computed(() => ({ '--hero-img': 'url(/Background.png)' }))
+const { account, ensureChain } = useMetamask()
+const TICKETS_CONTRACT = import.meta.env.VITE_TICKETS_CONTRACT || ''
+
+/** ===== TOPBAR HEIGHT (fix drawer nabrak header) ===== */
+const topbarEl = ref(null)
+const topbarH = ref(64)
+
+function measureTopbar() {
+  topbarH.value = topbarEl.value?.offsetHeight || 64
+}
+
+const rootStyle = computed(() => ({
+  '--hero-img': 'url(/Background.png)',
+  '--topbar-h': `${topbarH.value}px`,
+}))
 
 const RAW_BASE = (import.meta.env.VITE_API_BASE || 'http://localhost:3001').replace(/\/+$/, '')
 const API_HOST = RAW_BASE.replace(/\/api$/i, '')
@@ -34,10 +50,7 @@ async function convertIdrToWei(amountIdr) {
     body: JSON.stringify({ amount_idr: amountIdr })
   })
   if (!res || !res.price_wei) throw new Error('Gagal konversi')
-  // kalau backend juga kirim idr_per_pol, boleh sekalian simpan buat tampilan:
-  if (res.idr_per_pol) {
-    polRateIdr.value = Number(res.idr_per_pol)
-  }
+  if (res.idr_per_pol) polRateIdr.value = Number(res.idr_per_pol)
   return BigInt(res.price_wei)
 }
 
@@ -46,6 +59,7 @@ async function api(path, options = {}) {
   const method = String(options?.method || 'GET').toUpperCase()
   let url = `${API_HOST}${full}`
   if (method === 'GET') url = withWalletParam(url)
+
   const res = await fetch(url, {
     ...options,
     headers: {
@@ -75,24 +89,19 @@ async function uploadImageFile(file) {
 
 const role = ref('customer')
 const isAdmin = computed(() => role.value === 'admin')
-const isPromoter = computed(() => role.value === 'promoter')
-const heroTitle = computed(() => 
+const isPromoter = computed(() => role.value === 'promotor') // penting: backend kamu pakai 'promotor'
+const heroTitle = computed(() =>
   (isAdmin.value || isPromoter.value)
     ? 'CREATE A NEW EVENT'
     : 'UPCOMING CONCERT'
-) 
-// const heroTitle = computed(() => (isAdmin.value ? 'CREATE A NEW EVENT' : 'UPCOMING CONCERT'))
+)
 
-const walletAddress = computed(() => (getWallet() || ''). toLowerCase())
-function canManageEvent (ev) {
-  // Admin boleh semua
+const walletAddress = computed(() => (getWallet() || '').toLowerCase())
+function canManageEvent(ev) {
   if (isAdmin.value) return true
-
-  // Promoter hanya boleh event yang promoter_wallet = wallet-nya
   if (isPromoter.value) {
-    return (ev.promoter_wallet || '').toLowerCase() === walletAddress.value
+    return (ev.promotor_wallet || '').toLowerCase() === walletAddress.value
   }
-  // Customer nggak boleh apa-apa
   return false
 }
 
@@ -109,13 +118,13 @@ async function hydrateAccount() {
 
 async function loadRole() {
   const w = getWallet()
-  if (!w) { 
+  if (!w) {
     role.value = 'customer'
-    return }
+    return
+  }
   try {
     const me = await api('/api/me')
-    role.value = me?.role || 'customer' //backend sekarang balikin 3 level  //'admin' ? 'admin' : 'user'
-    // localStorage.setItem('user_role', role.value) //opsional : simpan biar komponen lain bisa baca cepat
+    role.value = me?.role || 'customer'
   } catch {
     role.value = 'customer'
   }
@@ -126,7 +135,8 @@ const errorMsg = ref('')
 const events = ref([])
 
 async function loadEvents() {
-  loading.value = true; errorMsg.value = ''
+  loading.value = true
+  errorMsg.value = ''
   try {
     const qs = isAdmin.value ? '?all=1' : ''
     const res = await api(`/api/events${qs}`)
@@ -140,18 +150,34 @@ async function loadEvents() {
 
 function onAccountsChanged(accs) {
   account.value = accs?.[0] || ''
-  loadRole(); loadEvents()
+  loadRole()
+  loadEvents()
 }
+
 onMounted(async () => {
   await hydrateAccount()
   if (window?.ethereum?.on) window.ethereum.on('accountsChanged', onAccountsChanged)
+
   await loadRole()
   await loadEvents()
+
+  // ukur tinggi topbar setelah DOM siap
+  await nextTick()
+  measureTopbar()
+  window.addEventListener('resize', measureTopbar)
 })
+
 onBeforeUnmount(() => {
   if (window?.ethereum?.removeListener) window.ethereum.removeListener('accountsChanged', onAccountsChanged)
+  window.removeEventListener('resize', measureTopbar)
 })
-watch(account, async () => { await loadRole(); await loadEvents() })
+
+watch(account, async () => {
+  await loadRole()
+  await loadEvents()
+  await nextTick()
+  measureTopbar()
+})
 
 const searchQuery = ref('')
 const filteredEvents = computed(() => {
@@ -170,31 +196,31 @@ const showCreate = ref(false)
 const showEdit = ref(false)
 
 const newEvent = reactive({
-  title: '', 
-  date_iso: '', 
-  venue: '', 
+  title: '',
+  date_iso: '',
+  venue: '',
   description: '',
-  image_url: '', 
-  price_idr: 0, 
-  total_tickets: 0, 
+  image_url: '',
+  price_idr: 0,
+  total_tickets: 0,
   listed: true
 })
 const newImageFile = ref(null)
 const newImagePreview = ref('')
 const uploading = ref(false)
+
 // gambar NFT
 const newNftImageFile = ref(null)
 const newNftImagePreview = ref('')
 const newNftImageUrl = ref('')
 
-// tampilan harga rupiah (dengan titik), sedangkan newEvent.price_idr tetap number polos
+// tampilan harga rupiah (dengan titik)
 const priceIdrDisplay = ref('')
 // rate POL/IDR dari backend
-const polRateIdr = ref(null)      // 1 POL = berapa IDR
+const polRateIdr = ref(null)
 const polRateLoading = ref(false)
 const polRateError = ref('')
 
-// --- FORMAT HARGA IDR ---
 function formatIdr(num) {
   if (!num) return ''
   const s = String(num)
@@ -203,8 +229,6 @@ function formatIdr(num) {
 
 function onPriceIdrInput(e) {
   let raw = e.target.value || ''
-
-  // buang semua selain angka
   raw = raw.replace(/[^\d]/g, '')
 
   if (!raw) {
@@ -218,7 +242,6 @@ function onPriceIdrInput(e) {
   priceIdrDisplay.value = formatIdr(num)
 }
 
-// kalau newEvent.price_idr berubah dari kode, tampilan ikut berubah
 watch(
   () => newEvent.price_idr,
   (val) => {
@@ -233,32 +256,26 @@ function onNewImageChange(e) {
   newImagePreview.value = f ? URL.createObjectURL(f) : ''
 }
 
-// --- HANDLE GAMBAR NFT ---
 function onNftImageChange(e) {
   const file = e.target.files?.[0]
   if (!file) {
     newNftImageFile.value = null
-    if (newNftImagePreview.value) {
-      URL.revokeObjectURL(newNftImagePreview.value)
-    }
+    if (newNftImagePreview.value) URL.revokeObjectURL(newNftImagePreview.value)
     newNftImagePreview.value = ''
     newNftImageUrl.value = ''
     return
   }
-  
+
   newNftImageFile.value = file
-  if (newNftImagePreview.value) {
-    URL.revokeObjectURL(newNftImagePreview.value)
-  }
+  if (newNftImagePreview.value) URL.revokeObjectURL(newNftImagePreview.value)
   newNftImagePreview.value = URL.createObjectURL(file)
 }
 
-// --- RATE POL/IDR + KONVERSI IDR -> WEI ---
 async function fetchPolRate() {
   try {
     polRateLoading.value = true
     polRateError.value = ''
-    const res = await api('/api/price/pol')   // backend kamu yang sekarang
+    const res = await api('/api/price/pol')
     const price = Number(res?.price_idr || 0)
     if (!price) throw new Error('Harga tidak valid')
     polRateIdr.value = price
@@ -270,14 +287,10 @@ async function fetchPolRate() {
   }
 }
 
-// dipanggil otomatis saat modal Create dibuka
 watch(showCreate, (val) => {
-  if (val) {
-    fetchPolRate()
-  }
+  if (val) fetchPolRate()
 })
 
-// konversi untuk tampilan realtime
 const priceInPol = computed(() => {
   if (!polRateIdr.value) return null
   const idr = Number(newEvent.price_idr || 0)
@@ -305,21 +318,19 @@ async function createEvent() {
       throw new Error('Harga tiket (IDR) wajib > 0')
     }
 
-    // Upload gambar event kalau ada → dipakai sekaligus sebagai metadataURI NFT
     if (newImageFile.value && !newEvent.image_url) {
       uploading.value = true
       const url = await uploadImageFile(newImageFile.value)
       newEvent.image_url = url
     }
 
-    // --- upload NFT image (kalau ada) ---
     if (newNftImageFile.value && !newNftImageUrl.value) {
       uploading.value = true
       const url = await uploadImageFile(newNftImageFile.value)
       newNftImageUrl.value = url
     }
-    // prioritas: NFT image → kalau kosong pakai banner → kalau kosong juga, ""
-    const metadataURI = newNftImageUrl.value || newEvent.image_url || ''   // boleh kosong, nanti fallback ke defaultURI kalau kamu set
+
+    const metadataURI = newNftImageUrl.value || newEvent.image_url || ''
 
     if (!TICKETS_CONTRACT) {
       throw new Error('VITE_TICKETS_CONTRACT belum diset di .env')
@@ -331,76 +342,41 @@ async function createEvent() {
     const signer = await provider.getSigner()
     const contract = new ethers.Contract(TICKETS_CONTRACT, ASIQTIX_TICKETS_ABI, signer)
 
-    // 1) Konversi harga IDR → wei (POL) lewat backend
     const priceWei = await convertIdrToWei(priceIdr)
 
-    // 2) Hitung maxSupply
     const maxSupply = BigInt(Math.floor(Number(newEvent.total_tickets) || 0))
     if (maxSupply <= 0n) throw new Error('Total tiket harus > 0')
 
-    // 3) Hitung eventTime (unix timestamp detik) dari tanggal yang diinput
     const eventDate = new Date(newEvent.date_iso)
     if (Number.isNaN(eventDate.getTime())) throw new Error('Tanggal event tidak valid')
     const eventTime = BigInt(Math.floor(eventDate.getTime() / 1000))
 
-    // // 4) Panggil kontrak
-    // await ensureChain('amoy')
-    // const { provider } = await connect()
-    // const signer = await provider.getSigner()
-
-    // const contract = new ethers.Contract(TICKETS_CONTRACT, ASIQTIX_TICKETS_ABI, signer)
-    // const nextId = await contract.nextEventId()
-    // 2. TEST DULU PAKAI callStatic
     try {
-      await contract.createEvent.staticCall(
-        priceWei,
-        maxSupply,
-        eventTime,
-        metadataURI
-      )
+      await contract.createEvent.staticCall(priceWei, maxSupply, eventTime, metadataURI)
     } catch (e) {
       console.error('callStatic createEvent REVERT:', e)
-      console.error('reason:', e.reason)
-      console.error('raw error:', e.error ?? e.data ?? e.info)
-
-      alert(
-        e?.reason ||
-        e?.error?.message ||
-        e?.message ||
-        'Create event gagal (revert dari smart contract)'
-      )
-      // jangan lanjut kirim transaksi kalau callStatic gagal
+      alert(e?.reason || e?.error?.message || e?.message || 'Create event gagal (revert dari smart contract)')
       return
     }
 
-    const tx = await contract.createEvent(
-      priceWei,
-      maxSupply,
-      eventTime,
-      metadataURI
-    )
+    const tx = await contract.createEvent(priceWei, maxSupply, eventTime, metadataURI)
     const receipt = await tx.wait()
     if (!receipt.status) throw new Error('Transaksi createEvent gagal di blockchain')
 
-    // const chainEventId = Number(nextId.toString())
-    // Ambil eventId dari event EventCreated di log
     let chainEventId = null
     for (const log of receipt.logs) {
       try {
-        const parsed = contract.interface.parseLog(log) // {topics: log.topics, data: log.data}
+        const parsed = contract.interface.parseLog(log)
         if (parsed?.name === 'EventCreated') {
           chainEventId = Number(parsed.args.eventId.toString())
           break
         }
       } catch {
-        // bukan log EventCreated dari kontrak ini
+        // skip log yang gak bisa di-parse
       }
     }
-    if (chainEventId == null) {
-      throw new Error('Tidak bisa menemukan eventId dari log EventCreated')
-    }
+    if (chainEventId == null) throw new Error('Tidak bisa menemukan eventId dari log EventCreated')
 
-    // 5) Simpan ke backend (Supabase) – chain_event_id nyambung ke eventId on-chain
     const payload = {
       title: newEvent.title,
       date_iso: toIso(newEvent.date_iso),
@@ -413,12 +389,8 @@ async function createEvent() {
       chain_event_id: chainEventId
     }
 
-    await api('/api/events', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    })
+    await api('/api/events', { method: 'POST', body: JSON.stringify(payload) })
 
-    // 6) Reset form & reload list
     Object.assign(newEvent, {
       title: '',
       date_iso: '',
@@ -432,16 +404,11 @@ async function createEvent() {
     priceIdrDisplay.value = ''
 
     newImageFile.value = null
-    if (newImagePreview.value) {
-      URL.revokeObjectURL(newImagePreview.value)
-      newImagePreview.value = ''
-    }
+    if (newImagePreview.value) URL.revokeObjectURL(newImagePreview.value)
+    newImagePreview.value = ''
 
-    // reset NFT
     newNftImageFile.value = null
-    if (newNftImagePreview.value) {
-      URL.revokeObjectURL(newNftImagePreview.value)
-    }
+    if (newNftImagePreview.value) URL.revokeObjectURL(newNftImagePreview.value)
     newNftImagePreview.value = ''
     newNftImageUrl.value = ''
 
@@ -453,13 +420,19 @@ async function createEvent() {
     alert(`Create event gagal: ${e?.message || e}`)
   } finally {
     uploading.value = false
-  } // diganti 26-11-2025
+  }
 }
 
 const editId = ref(null)
 const edit = reactive({
-  title: '', date_iso: '', venue: '', description: '',
-  image_url: '', price_pol: 0, total_tickets: 0, listed: true
+  title: '',
+  date_iso: '',
+  venue: '',
+  description: '',
+  image_url: '',
+  price_idr: 0,
+  total_tickets: 0,
+  listed: true
 })
 
 function startEdit(ev) {
@@ -473,11 +446,12 @@ function startEdit(ev) {
   edit.venue = ev.venue || ''
   edit.description = ev.description || ''
   edit.image_url = ev.image_url || ''
-  edit.price_idr = Number(ev.price_idr || 0)  // diganti 25-11-2025
+  edit.price_idr = Number(ev.price_idr || 0)
   edit.total_tickets = Number(ev.total_tickets || 0)
   edit.listed = !!ev.listed
   showEdit.value = true
 }
+
 function cancelEdit() { showEdit.value = false; editId.value = null }
 
 async function saveEdit() {
@@ -488,7 +462,7 @@ async function saveEdit() {
       venue: edit.venue,
       description: edit.description,
       image_url: edit.image_url || null,
-      price_idr: Number(edit.price_idr) || 0, // diganti 25-11-2025
+      price_idr: Number(edit.price_idr) || 0,
       total_tickets: Number(edit.total_tickets) || 0,
       listed: !!edit.listed
     }
@@ -497,7 +471,9 @@ async function saveEdit() {
     editId.value = null
     await loadEvents()
     alert('Event updated.')
-  } catch (e) { alert(`Update failed: ${e.message}`) }
+  } catch (e) {
+    alert(`Update failed: ${e.message}`)
+  }
 }
 
 async function removeEvent(id) {
@@ -507,16 +483,23 @@ async function removeEvent(id) {
 }
 
 async function toggleList(ev) {
-  try { await api(`/api/events/${ev.id}/list`, { method: 'PATCH', body: JSON.stringify({ listed: !ev.listed }) }); await loadEvents() }
-  catch (e) { alert(`List/Delist failed: ${e.message}`) }
+  try {
+    await api(`/api/events/${ev.id}/list`, { method: 'PATCH', body: JSON.stringify({ listed: !ev.listed }) })
+    await loadEvents()
+  } catch (e) {
+    alert(`List/Delist failed: ${e.message}`)
+  }
 }
 
-
+function imgFor(ev) {
+  const t = (ev?.title || '').toLowerCase()
+  return ev?.image_url || (t.includes('feast') ? imgFeast : (t.includes('sheila') ? imgSO7 : imgGigi))
+}
 </script>
 
 <template>
   <div class="home-page" :style="rootStyle">
-    <header class="topbar">
+    <header ref="topbarEl" class="topbar">
       <div class="brand"><img src="/logo_with_text.png" alt="Tickety" /></div>
       <form class="search search--top" @submit.prevent>
         <input class="search-input" v-model="searchQuery" type="search" placeholder="Search concerts, venues…" />
@@ -525,7 +508,7 @@ async function toggleList(ev) {
       <button class="hamburger" @click.stop="toggleSidebar" aria-label="Toggle Sidebar"><span/><span/><span/></button>
     </header>
 
-    <SideNavSB v-model="sidebarOpen" />
+    <Drawer v-model="sidebarOpen" />
 
     <main class="container">
       <section class="hero">
@@ -541,6 +524,7 @@ async function toggleList(ev) {
             <div class="img" :style="{ backgroundImage: `url(${imgFor(ev)})` }"></div>
             <div class="img-overlay"></div>
             <div class="title">{{ ev.title }}</div>
+
             <div v-if="canManageEvent(ev)" class="adm-tools">
               <button class="adm-btn" @click="startEdit(ev)" title="Edit">✎</button>
               <button class="adm-btn" @click="toggleList(ev)" :title="ev.listed ? 'Delist' : 'List'">
@@ -549,41 +533,48 @@ async function toggleList(ev) {
               <button class="adm-btn danger" @click="removeEvent(ev.id)" title="Delete">🗑</button>
             </div>
           </div>
+
           <div class="meta">
             <div><span class="k">Location:</span> <span class="v">{{ ev.venue }}</span></div>
             <div><span class="k">Date:</span> <span class="v">{{ new Date(ev.date_iso).toLocaleString('id-ID') }}</span></div>
           </div>
+
           <p class="desc">{{ ev.description || '(Blank Text)' }}</p>
           <button class="buy" @click="buyTicket(ev)">BUY TICKET</button>
         </article>
       </section>
     </main>
 
-    <button v-if="isAdmin || isPromoter" class="fab" title="Add event" aria-label="Create new event" @click="showCreate = true">＋<span class="sr-only">Create new event</span></button>
+    <button v-if="isAdmin || isPromoter" class="fab" title="Add event" aria-label="Create new event" @click="showCreate = true">
+      ＋<span class="sr-only">Create new event</span>
+    </button>
 
+    <!-- Create Modal -->
     <div v-if="showCreate" class="modal" @click.self="showCreate=false">
       <div class="modal-card">
         <button class="modal-x" aria-label="Close" @click="showCreate=false">×</button>
-        <h3>Create Event</h3>
+        <h3>Create New Event</h3>
         <form class="form" @submit.prevent="createEvent">
           <div class="scroll">
             <label>Title <input v-model="newEvent.title" /></label>
             <label>Date (UTC) <input type="datetime-local" step="60" v-model="newEvent.date_iso" /></label>
             <label>Venue <input v-model="newEvent.venue" /></label>
+
             <label class="file"><span>Image</span><input type="file" accept="image/*" @change="onNewImageChange" /></label>
             <div v-if="newImagePreview || newEvent.image_url" class="img-preview" :style="{ backgroundImage: `url(${newImagePreview || newEvent.image_url})` }"></div>
+
             <label class="block text-sm font-medium mb-1">NFT Image (optional)</label>
             <input type="file" accept="image/*" @change="onNftImageChange" />
             <p class="mt-1 text-xs text-gray-400">Jika tidak diisi, NFT akan memakai gambar banner event.</p>
-            <div v-if="newNftImagePreview" class="mt-2"><span class="text-xs text-gray-300">Preview NFT:</span><img :src="newNftImagePreview" alt="NFT preview" class="mt-1 h-24 rounded object-cover"/></div>
+            <div v-if="newNftImagePreview" class="mt-2">
+              <span class="text-xs text-gray-300">Preview NFT:</span>
+              <img :src="newNftImagePreview" alt="NFT preview" class="mt-1 h-24 rounded object-cover"/>
+            </div>
+
             <div class="mb-4">
               <label class="block text-sm font-medium mb-1">Price (IDR)</label>
               <div class="relative">
-                <span
-                  class="absolute inset-y-0 left-0 flex items-center pl-3 text-sm text-gray-400"
-                >
-                  Rp
-                </span>
+                <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-sm text-gray-400">Rp</span>
                 <input
                   type="text"
                   :value="priceIdrDisplay"
@@ -593,13 +584,12 @@ async function toggleList(ev) {
                   placeholder="contoh: 150.000"
                 />
               </div>
+
               <div class="mt-1 text-xs text-gray-300 flex items-center gap-2">
                 <span v-if="polRateLoading">Mengambil harga POL/IDR...</span>
                 <span v-else-if="polRateError">
                   {{ polRateError }}
-                  <button type="button" class="underline ml-1" @click="fetchPolRate">
-                    coba lagi
-                  </button>
+                  <button type="button" class="underline ml-1" @click="fetchPolRate">coba lagi</button>
                 </span>
                 <span v-else-if="priceInPol !== null">
                   ≈ {{ priceInPol.toFixed(4) }} POL
@@ -616,11 +606,12 @@ async function toggleList(ev) {
                 </span>
               </div>
             </div>
-            <!-- <label>Price (IDR) <input type="number" min="0" step="1" v-model.number="newEvent.price_idr" /></label> -->
+
             <label>Total Tickets <input type="number" min="0" step="1" v-model.number="newEvent.total_tickets" /></label>
             <label class="chk"><input type="checkbox" v-model="newEvent.listed" /> Listed</label>
             <label>Description <textarea rows="3" v-model="newEvent.description" /></label>
           </div>
+
           <div class="actions-bar">
             <button type="button" class="btn ghost" @click="showCreate=false">Cancel</button>
             <button type="submit" class="btn primary" :disabled="uploading">{{ uploading ? 'Uploading…' : 'Create' }}</button>
@@ -629,6 +620,7 @@ async function toggleList(ev) {
       </div>
     </div>
 
+    <!-- Edit Modal -->
     <div v-if="showEdit" class="modal" @click.self="cancelEdit()">
       <div class="modal-card">
         <button class="modal-x" aria-label="Close" @click="cancelEdit()">×</button>
@@ -644,6 +636,7 @@ async function toggleList(ev) {
             <label class="chk"><input type="checkbox" v-model="edit.listed" /> Listed</label>
             <label>Description <textarea rows="3" v-model="edit.description" /></label>
           </div>
+
           <div class="actions-bar">
             <button type="button" class="btn ghost" @click="cancelEdit()">Cancel</button>
             <button type="submit" class="btn primary">Save</button>
@@ -655,6 +648,18 @@ async function toggleList(ev) {
 </template>
 
 <style scoped>
+.topbar{
+  position: sticky; top: 0; z-index: 10;
+  display: grid;
+  grid-template-columns: 80px 1fr 56px;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 20px;
+  background: color-mix(in oklab, var(--bg), black 6%);
+  border-bottom: 1px solid color-mix(in oklab, var(--gold), black 35%);
+  backdrop-filter: blur(4px);
+}
+
 .fab{
   position: fixed;
   right: max(20px, env(safe-area-inset-right));
@@ -757,7 +762,6 @@ async function toggleList(ev) {
 .buy:hover{ filter:brightness(.96); }
 .img-gradient{ display:none !important; }
 
-.home-page{ --topbar-h:64px }
 .hero{
   position: relative;
   min-height: calc(100vh - var(--topbar-h));

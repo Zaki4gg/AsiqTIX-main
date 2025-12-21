@@ -2,7 +2,7 @@
 import '@/assets/wallet.css'
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import SideNavSB from '@/components/SideNavSB.vue'
+import Drawer from '@/components/DrawerNav.vue'
 import { io } from 'socket.io-client'
 // import { useMetamask } from '@/composables/useMetamask'
 // const { ensureChain } = useMetamask()
@@ -331,7 +331,7 @@ onUnmounted(() => {
       </button>
     </header>
 
-    <SideNavSB v-model="sidebarOpen" />
+    <Drawer v-model="sidebarOpen" />
 
     <div class="container">
       <section class="panel">

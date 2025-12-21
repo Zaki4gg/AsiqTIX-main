@@ -10,7 +10,7 @@ import { ASIQTIX_TICKETS_ABI } from '@/abi/asiqtixTicketsSimpleV3'
 
 const route = useRoute()
 const r = useRouter()
-const { connect, ensureChain } = useMetamask()
+const { ensureChain } = useMetamask()
 const TICKETS_CONTRACT = import.meta.env.VITE_TICKETS_CONTRACT || ''
 
 
@@ -51,7 +51,7 @@ const lastPurchaseError = ref('')
 const role = ref('customer')
 
 const isAdmin = computed(() => role.value === 'admin')
-const isPromoter = computed(() => role.value === 'promoter')
+// const isPromoter = computed(() => role.value === 'promoter')
 
 // ===================== 
 // Withdrawal logic for promoter/admin 

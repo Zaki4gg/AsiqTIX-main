@@ -3,7 +3,7 @@ import '@/assets/account.css'
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DrawerNav from '@/components/DrawerNav.vue'
-import { useConfirmLogout } from '@/composables/useConfirmLogout' // tetap
+// import { useConfirmLogout } from '@/composables/useConfirmLogout' // tetap
 import { useMetamask } from '@/composables/useMetamask'
 import profileSvgRaw from '@/assets/profile.svg?raw'
 import { io } from 'socket.io-client'
@@ -24,7 +24,9 @@ async function hydrateAccount() {
     try {
       const accs = await window.ethereum.request({ method: 'eth_accounts' })
       if (accs?.[0]) account.value = accs[0]
-    } catch {}
+    } catch {
+      //
+    }
   }
 }
 function onAccountsChanged(accs){
@@ -43,18 +45,18 @@ const CHAIN_SYMBOL = (idNum) => {
   if (idNum === 1 || idNum === 11155111) return 'ETH'  // Ethereum mainnet & Sepolia
   return 'ETH'
 }
-function formatToken(wei, decimals = 18, precision = 4) {
-  try {
-    const neg = wei < 0n
-    const x = neg ? -wei : wei
-    const base = 10n ** BigInt(decimals)
-    const integer = x / base
-    let fraction = (x % base).toString().padStart(decimals, '0')
-    fraction = fraction.slice(0, precision).replace(/0+$/, '')
-    return `${neg ? '-' : ''}${integer.toString()}${fraction ? '.' + fraction : ''}`
-  } catch { return '0' }
-}
-const balanceText = computed(() => `${formatToken(balanceWei.value, 18, 4)} ${nativeSymbol.value}`)
+// function formatToken(wei, decimals = 18, precision = 4) {
+//   try {
+//     const neg = wei < 0n
+//     const x = neg ? -wei : wei
+//     const base = 10n ** BigInt(decimals)
+//     const integer = x / base
+//     let fraction = (x % base).toString().padStart(decimals, '0')
+//     fraction = fraction.slice(0, precision).replace(/0+$/, '')
+//     return `${neg ? '-' : ''}${integer.toString()}${fraction ? '.' + fraction : ''}`
+//   } catch { return '0' }
+// }
+// const balanceText = computed(() => `${formatToken(balanceWei.value, 18, 4)} ${nativeSymbol.value}`)
 
 async function detectChain() {
   if (!window?.ethereum) return
@@ -62,7 +64,9 @@ async function detectChain() {
     const id = await window.ethereum.request({ method: 'eth_chainId' })
     chainIdHex.value = id
     nativeSymbol.value = CHAIN_SYMBOL(Number(id))
-  } catch {}
+  } catch {
+    //
+  }
 }
 async function refreshBalance() {
   if (!window?.ethereum || !account.value) { balanceWei.value = 0n; return }
@@ -182,7 +186,7 @@ function copyAddr(){
 const profileSvg = computed(() => profileSvgRaw)
 
 /* ---------- TOP UP URL ---------- */
-const topUpUrl = 'https://app.metamask.io/buy/build-quote'
+// const topUpUrl = 'https://app.metamask.io/buy/build-quote'
 
 /* ---------- lifecycle ---------- */
 let balTimer = null

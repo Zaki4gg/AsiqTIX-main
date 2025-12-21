@@ -253,7 +253,9 @@ async function hydrate() {
       await loadTransactions()
       startSocket()
     }
-  } catch {}
+  } catch {
+    //
+  }
 }
 
 /* utils UI */

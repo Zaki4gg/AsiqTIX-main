@@ -1,4 +1,6 @@
 // backend/server.js
+
+/* eslint-env node */
 import 'dotenv/config'
 import http from 'node:http'
 import multer from 'multer'
@@ -14,7 +16,7 @@ import { verifyMessage } from 'ethers'
 import { Server as IOServer } from 'socket.io'
 import supabase from './supabaseClient.js'
 import { JsonRpcProvider, Contract } from 'ethers'
-// import fetch from 'node-fetch'
+import process from 'node:process'
 
 // ----- Harga POL/IDR helper -----
 import fetch from 'node-fetch'  // kalau belum, npm install node-fetch
@@ -260,7 +262,7 @@ app.get('/api/me', requireAddress, async (req, res) => {
   // 1. kalau ada di tabel admins → selalu admin
   const admin = await isAdmin(addr)
   if (admin) {
-    return res.json({ address: addr, role: 'admin' })      
+    return res.json({ address: addr, role: 'admin' })
   }
 
   try {
@@ -314,28 +316,7 @@ const httpJSON = async (url, { timeout = 6000 } = {}) => {
     return await r.json()
   } finally { clearTimeout(t) }
 }
-const usdIdrCache = { v: null, ts: 0 }
-async function getUsdIdr() {
-  const now = Date.now()
-  if (usdIdrCache.v && now - usdIdrCache.ts < 10 * 60_000) return usdIdrCache.v
-  try { const j = await httpJSON('https://api.exchangerate.host/latest?base=USD&symbols=IDR'); const v = Number(j?.rates?.IDR); if (v) { usdIdrCache.v = v; usdIdrCache.ts = now; return v } } catch {}
-  try { const j = await httpJSON('https://api.frankfurter.app/latest?from=USD&to=IDR'); const v = Number(j?.rates?.IDR); if (v) { usdIdrCache.v = v; usdIdrCache.ts = now; return v } } catch {}
-  try { const j = await httpJSON('https://open.er-api.com/v6/latest/USD'); const v = Number(j?.rates?.IDR); if (v) { usdIdrCache.v = v; usdIdrCache.ts = now; return v } } catch {}
-  throw new Error('USD→IDR unavailable')
-}
-async function trySpotUSD() {
-  try { const j = await httpJSON('https://api.binance.com/api/v3/ticker/price?symbol=POLUSDT'); const p = Number(j?.price); if (p) return { p, src: 'binance:POLUSDT' } } catch {}
-  try { const j = await httpJSON('https://api.binance.com/api/v3/ticker/price?symbol=MATICUSDT'); const p = Number(j?.price); if (p) return { p, src: 'binance:MATICUSDT' } } catch {}
-  try { const j = await httpJSON('https://www.okx.com/api/v5/market/ticker?instId=POL-USDT'); const p = Number(j?.data?.[0]?.last); if (p) return { p, src: 'okx:POL-USDT' } } catch {}
-  try { const j = await httpJSON('https://www.okx.com/api/v5/market/ticker?instId=MATIC-USDT'); const p = Number(j?.data?.[0]?.last); if (p) return { p, src: 'okx:MATICUSDT' } } catch {}
-  try { const j = await httpJSON('https://api.bybit.com/v5/market/tickers?category=spot&symbol=POLUSDT'); const p = Number(j?.result?.list?.[0]?.lastPrice); if (p) return { p, src: 'bybit:POLUSDT' } } catch {}
-  try { const j = await httpJSON('https://api.bybit.com/v5/market/tickers?category=spot&symbol=MATICUSDT'); const p = Number(j?.result?.list?.[0]?.lastPrice); if (p) return { p, src: 'bybit:MATICUSDT' } } catch {}
-  try { const j = await httpJSON('https://api.mexc.com/api/v3/ticker/price?symbol=POLUSDT'); const p = Number(j?.price); if (p) return { p, src: 'mexc:POLUSDT' } } catch {}
-  try { const j = await httpJSON('https://api.mexc.com/api/v3/ticker/price?symbol=MATICUSDT'); const p = Number(j?.price); if (p) return { p, src: 'mexc:MATICUSDT' } } catch {}
-  try { const j = await httpJSON('https://api.gateio.ws/api/v4/spot/tickers?currency_pair=POL_USDT'); const p = Number(j?.[0]?.last); if (p) return { p, src: 'gate:POL_USDT' } } catch {}
-  try { const j = await httpJSON('https://api.gateio.ws/api/v4/spot/tickers?currency_pair=MATIC_USDT'); const p = Number(j?.[0]?.last); if (p) return { p, src: 'gate:MATIC_USDT' } } catch {}
-  throw new Error('All exchanges failed')
-}
+
 app.get('/api/price/pol', async (_req, res) => {
   try {
     const priceIdr = await fetchPolIdrRate()
@@ -451,7 +432,7 @@ app.post('/api/events', requireAddress, async (req, res) => {
   if (error) return res.status(500).json({ error: error.message })
   res.status(201).json(data)
 })
-  
+
 app.put('/api/events/:id', requireAddress, async (req, res) => {
   const wallet = req.walletAddress
   const user = await ensureUserRow(wallet) // dari step 4
@@ -522,7 +503,7 @@ app.delete('/api/events/:id', requireAddress, async (req, res) => {
   if (!isAdmin && !isOwner) {
     return res.status(403).json({ error: 'bukan_admin_atau_pemilik_event' }) // 'not_event_owner'
   }
-  
+
   const { error } = await supabase
     .from('events')
     .delete()
@@ -695,7 +676,7 @@ app.post(['/api/purchase', '/purchase'], requireAddress, async (req, res) => {
 
   const addr = req.walletAddress
   const { amount, ref_id, description, tx_hash } = parsed.data
-  
+
   if (ref_id) {
     const { data: ev, error: evErr } = await supabase
       .from('events')
@@ -732,7 +713,7 @@ app.post(['/api/purchase', '/purchase'], requireAddress, async (req, res) => {
     // finalAmount = Number(ev.price_idr)  // finalAmount = Number(ev.price_pol) diganti 25-11-2025
   }
   // let finalAmount = Number(amount)
-  
+
   const tx = {
     wallet: addr,
     kind: 'purchase',
@@ -742,17 +723,17 @@ app.post(['/api/purchase', '/purchase'], requireAddress, async (req, res) => {
     status: 'confirmed',
     tx_hash: tx_hash || null
   }
-  
+
   const { data, error } = await supabase
   .from('transactions')
   .insert(tx)
   .select()
   .single()
-  
+
   if (error) {
     return res.status(500).json({ error: error.message })
   }
-  
+
   emitTx(addr, data)
   res.json({ ok: true, tx: data })
 
@@ -855,7 +836,7 @@ app.post('/api/promoters', requireAdmin, async (req, res) => {
    FALLBACK & ERROR HANDLER
    ========================= */
 app.use((req, res) => res.status(404).json({ message: 'Not Found' }))
-// eslint-disable-next-line no-unused-vars
+
 app.use((err, _req, res, _next) => {
   console.error('[server] Unhandled error:', err && err.stack ? err.stack : err)
   res.status(err.status || 500).json({ message: err.message || 'Internal Server Error' })

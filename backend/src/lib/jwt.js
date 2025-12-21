@@ -2,6 +2,9 @@
 // ESM, tanpa dependensi eksternal (HS256 via crypto)
 
 import crypto from 'node:crypto'
+import process from 'node:process'
+import { Buffer } from 'node:buffer'
+
 
 const SECRET = process.env.JWT_SECRET
 if (!SECRET) {

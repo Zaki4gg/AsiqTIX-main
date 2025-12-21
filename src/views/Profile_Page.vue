@@ -1,15 +1,13 @@
-<!-- Profile.vue -->
 <script setup>
-defineOptions({ name: 'UserProfile' })
 import '@/assets/account.css'
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import SideNavSB from '@/components/SideNavSB.vue'
+import DrawerNav from '@/components/DrawerNav.vue'
 import { useMetamask } from '@/composables/useMetamask'
 import profileSvgRaw from '@/assets/profile.svg?raw'
 import { io } from 'socket.io-client'
 
-/* ---------- ROUTE  ---------- */
+/* ---------- ROUTE + DRAWER ---------- */
 const route = useRoute()
 const router = useRouter()
 const sidebarOpen = ref(false)
@@ -46,7 +44,6 @@ const CHAIN_SYMBOL = (idNum) => {
   if (idNum === 1 || idNum === 11155111) return 'ETH'  // Ethereum mainnet & Sepolia
   return 'ETH'
 }
-
 
 async function detectChain() {
   if (!window?.ethereum) return
@@ -211,7 +208,7 @@ watch(account, async () => { await detectChain(); await refreshBalance(); await 
       </button>
     </header>
 
-    <SideNavSB v-model="sidebarOpen" />
+    <DrawerNav v-model="sidebarOpen" />
 
     <div class="content">
       <div class="grid">

@@ -1,5 +1,6 @@
 // backend/src/lib/nonce-store/index.js
 // Mendukung NONCE_TTL_SECONDS (detik) & NONCE_TTL_MS (ms). Default 5 menit.
+import process from 'node:process'
 const SEC = Number(process.env.NONCE_TTL_SECONDS || 0)
 const MS  = Number(process.env.NONCE_TTL_MS || 0)
 const TTL_MS = MS > 0 ? MS : (SEC > 0 ? SEC * 1000 : 5 * 60 * 1000)

@@ -2,6 +2,7 @@
 import 'dotenv/config'
 import { ethers } from 'ethers'
 import abiMod from '../abi/Ticket1155Custodial.json' with { type: 'json' }
+import process from 'node:process'
 const NFT_ABI = abiMod.default ?? abiMod
 
 export const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS

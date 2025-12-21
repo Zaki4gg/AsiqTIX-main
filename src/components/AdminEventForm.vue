@@ -55,59 +55,44 @@
   </div>
 </template>
 
-<script setup lang="ts">
+<script setup>
 import { ref, watch, computed } from 'vue'
 
-type EventRow = {
-  id?: string
-  title: string
-  date_iso: string
-  venue: string
-  description?: string
-  image_url?: string | null
-  price_pol: number
-  total_tickets: number
-  listed: boolean
-}
+const props = defineProps({
+  open: { type: Boolean, required: true },
+  initial: { type: Object, default: null },
+  mode: { type: String, default: 'create' }
+})
 
-const props = defineProps<{
-  open: boolean
-  initial?: Partial<EventRow> | null
-  mode?: 'create' | 'edit'
-}>()
-
-const emit = defineEmits<{
-  (e: 'close'): void
-  (e: 'created', row: EventRow): void
-  (e: 'updated', row: EventRow): void
-}>()
+const emit = defineEmits(['close', 'created', 'updated'])
 
 const isEdit = computed(() => (props.mode || 'create') === 'edit')
 
 const API_BASE = (import.meta.env?.VITE_API_BASE || 'http://localhost:3001').replace(/\/+$/,'')
-function walletAddr(): string {
+function walletAddr() {
   return (localStorage.getItem('walletAddress') || '').toLowerCase()
 }
-async function api(path: string, init?: RequestInit) {
+async function api(path, init) {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`
-  const headers: Record<string, string> = { ...(init?.headers as any || {}), 'x-wallet-address': walletAddr() }
+  const headers = { ...(init?.headers || {}), 'x-wallet-address': walletAddr() }
   if (init?.body && !(init?.body instanceof FormData)) headers['Content-Type'] = headers['Content-Type'] || 'application/json'
   const res = await fetch(url, { ...init, headers })
-  const text = await res.text().catch(()=>'')
+  const text = await res.text().catch(()=> '')
   const data = text ? (()=>{ try { return JSON.parse(text) } catch { return { message: text } } })() : {}
   if (!res.ok) throw new Error(data?.error || data?.message || `HTTP ${res.status}`)
   return data
 }
-function toUtcIsoFromLocal(local: string): string {
+
+function toUtcIsoFromLocal(local) {
   const d = new Date(local)
-  if (isNaN(d.getTime())) throw new Error('Tanggal tidak valid')
+  if (Number.isNaN(d.getTime())) throw new Error('Tanggal tidak valid')
   return d.toISOString()
 }
-function toLocalInputFromIso(iso?: string): string {
+function toLocalInputFromIso(iso) {
   if (!iso) return ''
   const d = new Date(iso)
-  if (isNaN(d.getTime())) return ''
-  const p = (n: number) => String(n).padStart(2,'0')
+  if (Number.isNaN(d.getTime())) return ''
+  const p = (n) => String(n).padStart(2,'0')
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
@@ -119,17 +104,17 @@ const form = ref({
   price_pol: 0,
   total_tickets: 0,
   listed: true,
-  image_url: '' as string | null
+  image_url: ''
 })
 
-const imageFile = ref<File | null>(null)
+const imageFile = ref(null)
 const imageName = ref('')
 const previewUrl = ref('')
 const submitting = ref(false)
 const status = ref('')
-const statusType = ref<'success'|'error'|''>('')
+const statusType = ref('')
 
-function setStatus(msg: string, type: 'success'|'error'|'') {
+function setStatus(msg, type) {
   status.value = msg
   statusType.value = type
   setTimeout(()=>{ status.value=''; statusType.value='' }, 4000)
@@ -149,14 +134,15 @@ function hydrateFromInitial() {
   form.value.price_pol = Number(init.price_pol || 0)
   form.value.total_tickets = Number(init.total_tickets || 0)
   form.value.listed = init.listed ?? true
-  form.value.image_url = (init.image_url as any) || ''
+  form.value.image_url = init.image_url || ''
   resetFilePreview()
 }
+
 watch(() => props.open, (v) => { if (v) hydrateFromInitial() })
 watch(() => props.initial, () => { if (props.open) hydrateFromInitial() })
 
-function onPickFile(e: Event) {
-  const f = (e.target as HTMLInputElement)?.files?.[0] || null
+function onPickFile(e) {
+  const f = e.target?.files?.[0] || null
   imageFile.value = f
   imageName.value = f?.name || ''
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
@@ -166,7 +152,7 @@ function emitClose() {
   resetFilePreview()
   emit('close')
 }
-async function uploadImageIfAny(): Promise<string | null> {
+async function uploadImageIfAny() {
   if (!imageFile.value) return form.value.image_url || null
   const fd = new FormData()
   fd.append('file', imageFile.value)
@@ -175,6 +161,7 @@ async function uploadImageIfAny(): Promise<string | null> {
   if (!url || !/^https?:\/\//i.test(url)) throw new Error('Upload gagal: URL tidak valid dari server')
   return url
 }
+
 async function onSubmit() {
   if (!form.value.title || !form.value.date_local || !form.value.venue) {
     setStatus('Lengkapi minimal judul, tanggal, dan venue.', 'error'); return
@@ -192,8 +179,9 @@ async function onSubmit() {
       total_tickets: Number(form.value.total_tickets) || 0,
       listed: !!form.value.listed
     }
+
     if (isEdit.value) {
-      const id = (props.initial?.id as string) || ''
+      const id = props.initial?.id || ''
       if (!id) throw new Error('ID event tidak ditemukan.')
       const row = await api(`/api/events/${id}`, { method: 'PUT', body: JSON.stringify(payload) })
       setStatus('Event berhasil diperbarui.', 'success')
@@ -206,13 +194,14 @@ async function onSubmit() {
       resetFilePreview()
     }
     setTimeout(emitClose, 300)
-  } catch (e: any) {
+  } catch (e) {
     setStatus(String(e?.message || e), 'error')
   } finally {
     submitting.value = false
   }
 }
 </script>
+
 
 <style scoped>
 .modal{

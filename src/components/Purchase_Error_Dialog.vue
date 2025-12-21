@@ -9,7 +9,7 @@ const close = () => emit('close')
 </script>
 
 <template>
-  <div v-if="open" class="modal-backdrop">
+  <div v-if="props.open" class="modal-backdrop">
     <div class="modal">
       <div class="card">
         <h2>Pembelian Gagal</h2>
